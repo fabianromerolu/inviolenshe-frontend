@@ -278,10 +278,12 @@ function CooccurrenceTab() {
           {data.total_sessions_analyzed} sesiones analizadas
         </p>
         <div className="flex items-center gap-2">
-          <Label className="text-xs">Top N:</Label>
+          <Label htmlFor="topN-select" className="text-xs">Top N:</Label>
           <select
+            id="topN-select"
+            title="Seleccionar número de pares a mostrar"
             value={topN}
-            onChange={(e) => setTopN(Number(e.target.value))}
+            onChange={(e) => setTopN(Number((e.target as HTMLSelectElement).value))}
             className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-xs"
           >
             {[10, 20, 30, 50].map((n) => (
@@ -351,10 +353,12 @@ function TaxonomyTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Label className="text-sm shrink-0">Filtrar concepto:</Label>
+        <Label htmlFor="concept-select" className="text-sm shrink-0">Filtrar concepto:</Label>
         <select
+          id="concept-select"
+          title="Seleccionar concepto para filtrar la taxonomía"
           value={selectedConcept}
-          onChange={(e) => setSelectedConcept(e.target.value)}
+          onChange={(e) => setSelectedConcept((e.target as HTMLSelectElement).value)}
           className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 flex-1 max-w-xs"
         >
           <option value="">Todos los conceptos</option>
