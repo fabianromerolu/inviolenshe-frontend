@@ -1,9 +1,33 @@
 import axios from "axios";
+import Cookies from "js-cookie";
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
   timeout: 300000, // 5 min para procesar audio largo
 });
+
+// Añadir token JWT a todas las peticiones
+api.interceptors.request.use((config) => {
+  const token = Cookies.get("auth_token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Redirigir a /login si el servidor responde 401
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      Cookies.remove("auth_token");
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 export interface ProcessResponse {
   session_id: string | null;
@@ -167,5 +191,36 @@ export const apiMLCooccurrence = (top_n = 20) =>
 
 export const apiMLTaxonomy = (concept?: string) =>
   api.get<TaxonomyResponse>(`/ml/taxonomy${concept ? `?concept=${concept}` : ""}`).then((r) => r.data);
+
+// ── Sesiones (historial) ──────────────────────────────────────────────────────
+
+export interface SessionSummary {
+  id: string;
+  filename: string;
+  source_type: string;
+  language: string;
+  profile: string;
+  created_at: string;
+  duration_seconds: number;
+  file_size_bytes: number;
+  total_matches: number;
+  total_review_candidates: number;
+  status: string;
+}
+
+export interface SessionDetail extends SessionSummary {
+  detections: Array<KeywordMatch & { id: string; page_number?: number }>;
+}
+
+export const apiListSessions = (sourceTypes: string[], skip = 0, limit = 20) => {
+  const params = new URLSearchParams();
+  sourceTypes.forEach((t) => params.append("source_type", t));
+  params.set("skip", String(skip));
+  params.set("limit", String(limit));
+  return api.get<SessionSummary[]>(`/sessions?${params}`).then((r) => r.data);
+};
+
+export const apiGetSession = (id: string) =>
+  api.get<SessionDetail>(`/sessions/${id}`).then((r) => r.data);
 
 export default api;

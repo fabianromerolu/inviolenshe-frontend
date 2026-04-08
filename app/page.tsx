@@ -1,10 +1,28 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { apiHealth } from "@/lib/api";
+import { useUploadStore } from "@/lib/upload-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, Upload, FileText, Brain, CheckCircle, AlertCircle } from "lucide-react";
+import {
+  Activity, Upload, FileText, Brain, CheckCircle, AlertCircle,
+  Loader2, X, Clock,
+} from "lucide-react";
 import Link from "next/link";
+
+function ElapsedTime({ since }: { since: Date }) {
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.floor((now - since.getTime()) / 1000);
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return <span>{m > 0 ? `${m}m ` : ""}{s}s</span>;
+}
+
+import React from "react";
 
 export default function DashboardPage() {
   const { data: health, isLoading, error } = useQuery({
@@ -13,12 +31,94 @@ export default function DashboardPage() {
     refetchInterval: 30000,
   });
 
+  const { uploads, dismissUpload } = useUploadStore();
+
+  // Mostrar uploads activos y los completados en los últimos 5 minutos
+  const visibleUploads = uploads.filter((u) => {
+    if (u.status === "uploading") return true;
+    if (u.finishedAt) {
+      return Date.now() - u.finishedAt.getTime() < 5 * 60 * 1000;
+    }
+    return false;
+  });
+
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
         <p className="text-gray-500 mt-1">Estado del backend y accesos rápidos</p>
       </div>
+
+      {/* Sección de uploads activos */}
+      {visibleUploads.length > 0 && (
+        <Card className="border-rose-200 dark:border-rose-800">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-rose-700 dark:text-rose-400">
+              <Upload className="h-4 w-4" />
+              Cargas en curso
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {visibleUploads.map((u) => (
+              <div
+                key={u.id}
+                className={`flex items-center gap-3 rounded-lg p-3 ${
+                  u.status === "uploading"
+                    ? "bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800"
+                    : u.status === "done"
+                    ? "bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800"
+                    : "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800"
+                }`}
+              >
+                {u.status === "uploading" ? (
+                  <Loader2 className="h-4 w-4 text-blue-600 animate-spin shrink-0" />
+                ) : u.status === "done" ? (
+                  <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
+                )}
+
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate dark:text-white">{u.filename}</p>
+                  <p className="text-xs text-gray-500">
+                    {u.status === "uploading" ? (
+                      <>
+                        Procesando…{" "}
+                        <span className="font-mono">
+                          <Clock className="h-3 w-3 inline mr-0.5" />
+                          <ElapsedTime since={u.startedAt} />
+                        </span>
+                      </>
+                    ) : u.status === "done" ? (
+                      <>
+                        Análisis listo para revisión ·{" "}
+                        <Link
+                          href={u.mediaType === "document" ? "/documents" : "/process"}
+                          className="underline text-green-700 dark:text-green-400"
+                        >
+                          Ver resultado
+                        </Link>
+                      </>
+                    ) : (
+                      "Error al procesar el archivo"
+                    )}
+                  </p>
+                </div>
+
+                {u.status !== "uploading" && (
+                  <button
+                    onClick={() => dismissUpload(u.id)}
+                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0"
+                    title="Cerrar"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Health status */}
       <Card>
