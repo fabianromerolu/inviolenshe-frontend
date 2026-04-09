@@ -42,6 +42,32 @@ export interface ProcessResponse {
   clips: ClipResult[];
 }
 
+export interface DocumentMatch extends KeywordMatch {
+  page: number;
+  char_start: number;
+  char_end: number;
+}
+
+export interface DocumentReviewCandidate extends ReviewCandidate {
+  page: number;
+  char_start: number;
+  char_end: number;
+}
+
+export interface DocumentProcessResponse {
+  session_id: string | null;
+  filename: string;
+  source_type: string;
+  language: string;
+  total_pages: number;
+  processing_time_seconds: number;
+  total_matches: number;
+  total_review_candidates: number;
+  matches: DocumentMatch[];
+  review_candidates: DocumentReviewCandidate[];
+  export_hint: string;
+}
+
 export interface KeywordMatch {
   label: string;
   matched_term: string;
@@ -171,14 +197,52 @@ export const apiProcessDocument = (file: File, language: string, profile: string
   form.append("file", file);
   form.append("language", language);
   form.append("profile", profile);
-  return api.post<ProcessResponse>("/process-document", form).then((r) => r.data);
+  return api.post<DocumentProcessResponse>("/process-document", form).then((r) => r.data);
 };
 
 export const apiFeedback = (detection_id: string, action: string, notes?: string) =>
   api.post<FeedbackResponse>("/feedback", { detection_id, action, notes }).then((r) => r.data);
 
-export const apiExportUrl = (session_id: string) =>
-  `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/export?session_id=${session_id}`;
+function getDownloadFilename(contentDisposition: string | undefined, fallback: string): string {
+  if (!contentDisposition) return fallback;
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  if (filenameMatch?.[1]) {
+    return filenameMatch[1];
+  }
+
+  return fallback;
+}
+
+export async function apiExportSession(session_id: string): Promise<void> {
+  const response = await api.get<Blob>("/export", {
+    params: { session_id },
+    responseType: "blob",
+  });
+
+  const filename = getDownloadFilename(
+    response.headers["content-disposition"],
+    `${session_id}_matches.csv`
+  );
+
+  const blob = new Blob([response.data], {
+    type: response.headers["content-type"] || "text/csv;charset=utf-8",
+  });
+
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = downloadUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
 
 export const apiMLInsights = () =>
   api.get<MLInsightsResponse>("/ml/insights").then((r) => r.data);

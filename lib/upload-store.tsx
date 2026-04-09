@@ -1,6 +1,8 @@
 "use client";
 import { createContext, useContext, useReducer, useCallback, type ReactNode } from "react";
-import type { ProcessResponse } from "@/lib/api";
+import type { DocumentProcessResponse, ProcessResponse } from "@/lib/api";
+
+export type StoredUploadResult = ProcessResponse | DocumentProcessResponse;
 
 export type UploadStatus = "uploading" | "done" | "error";
 export type UploadMediaType = "audio" | "video" | "document";
@@ -10,7 +12,7 @@ export interface UploadEntry {
   filename: string;
   mediaType: UploadMediaType;
   status: UploadStatus;
-  result?: ProcessResponse;
+  result?: StoredUploadResult;
   startedAt: Date;
   finishedAt?: Date;
 }

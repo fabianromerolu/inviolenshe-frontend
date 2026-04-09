@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   apiProcess,
   apiFeedback,
-  apiExportUrl,
+  apiExportSession,
   apiListSessions,
   apiGetSession,
   ProcessResponse,
@@ -18,7 +18,7 @@ import {
 } from "@/lib/api";
 import { useUploadStore } from "@/lib/upload-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -148,6 +148,7 @@ function ResultPanel({
   onFeedback: (id: string, action: string) => void;
 }) {
   const sourceType = file?.type.startsWith("video") ? "video" : "audio";
+  const [isExporting, setIsExporting] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -160,10 +161,22 @@ function ResultPanel({
           </p>
         </div>
         {result.session_id && (
-          <a href={apiExportUrl(result.session_id)} download className={buttonVariants({ variant: "outline", size: "sm" })}>
-            <Download className="mr-2 h-4 w-4" />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isExporting}
+            onClick={async () => {
+              try {
+                setIsExporting(true);
+                await apiExportSession(result.session_id!);
+              } finally {
+                setIsExporting(false);
+              }
+            }}
+          >
+            {isExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
             Exportar CSV
-          </a>
+          </Button>
         )}
       </div>
 

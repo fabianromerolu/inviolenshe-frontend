@@ -8,17 +8,17 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   apiProcessDocument,
   apiFeedback,
-  apiExportUrl,
+  apiExportSession,
   apiListSessions,
   apiGetSession,
-  ProcessResponse,
+  DocumentProcessResponse,
   KeywordMatch,
   SessionSummary,
   SessionDetail,
 } from "@/lib/api";
 import { useUploadStore } from "@/lib/upload-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -226,7 +226,8 @@ function HistoryTab() {
 
 export default function DocumentsPage() {
   const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<ProcessResponse | null>(null);
+  const [result, setResult] = useState<DocumentProcessResponse | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const { addUpload, updateUpload } = useUploadStore();
 
   const { register, handleSubmit } = useForm<FormValues>({
@@ -388,10 +389,22 @@ export default function DocumentsPage() {
                   </p>
                 </div>
                 {result.session_id && (
-                  <a href={apiExportUrl(result.session_id)} download className={buttonVariants({ variant: "outline", size: "sm" })}>
-                    <Download className="mr-2 h-4 w-4" />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isExporting}
+                    onClick={async () => {
+                      try {
+                        setIsExporting(true);
+                        await apiExportSession(result.session_id!);
+                      } finally {
+                        setIsExporting(false);
+                      }
+                    }}
+                  >
+                    {isExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
                     Exportar CSV
-                  </a>
+                  </Button>
                 )}
               </div>
 
