@@ -10,13 +10,13 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+        default: "bg-primary text-primary-foreground shadow-[0_14px_28px_-18px_rgba(190,24,93,0.34)] hover:-translate-y-px hover:shadow-[0_20px_34px_-16px_rgba(190,24,93,0.42)] [a]:hover:bg-primary/80",
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border-border bg-background shadow-[0_8px_18px_-16px_rgba(15,23,42,0.12)] hover:-translate-y-px hover:border-black/10 hover:bg-muted hover:text-foreground hover:shadow-[0_16px_30px_-18px_rgba(15,23,42,0.16)] aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/25 dark:hover:border-white/14 dark:hover:bg-input/40 dark:hover:shadow-[0_18px_30px_-18px_rgba(0,0,0,0.35)]",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
+          "bg-secondary text-secondary-foreground shadow-[0_8px_18px_-16px_rgba(15,23,42,0.08)] hover:-translate-y-px hover:bg-secondary/90 hover:shadow-[0_14px_26px_-16px_rgba(15,23,42,0.14)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
-          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+          "hover:bg-muted hover:text-foreground hover:shadow-[0_10px_18px_-18px_rgba(15,23,42,0.16)] aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",

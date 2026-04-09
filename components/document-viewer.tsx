@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { KeywordMatch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,14 +113,12 @@ function PDFViewer({
   file: File;
   matches: Array<KeywordMatch & { page_number?: number }>;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
+  const src = useMemo(() => URL.createObjectURL(file), [file]);
 
   useEffect(() => {
-    const url = URL.createObjectURL(file);
-    setSrc(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    return () => URL.revokeObjectURL(src);
+  }, [src]);
 
   const terms = [...new Set(matches.map((m) => m.matched_term).filter(Boolean))];
 

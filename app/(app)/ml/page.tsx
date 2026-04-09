@@ -472,9 +472,10 @@ function TaxonomyTab() {
 export default function MLPage() {
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
+      <div className="space-y-3">
+        <div className="lab-chip lab-tone-analytics">Analitica</div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-          <Brain className="h-6 w-6 text-purple-600" /> ML & Analytics
+          <Brain className="h-6 w-6 text-amber-600" /> ML & Analytics
         </h1>
         <p className="text-gray-500 mt-1">
           Insights adaptativos, umbrales por concepto, co-ocurrencias y taxonomía normativa
