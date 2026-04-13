@@ -15,6 +15,8 @@ export interface UploadEntry {
   result?: StoredUploadResult;
   startedAt: Date;
   finishedAt?: Date;
+  fileId?: string;       // devuelto por POST /upload, necesario para POST /analyze
+  uploadedFile?: File;   // File object del browser para mantenerlo vivo entre pasos
 }
 
 type Action =

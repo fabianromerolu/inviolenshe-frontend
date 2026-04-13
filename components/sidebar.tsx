@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Brain, FileText, Home, LogOut, Moon, Shield, Sun, Upload } from "lucide-react";
+import { Brain, FileText, FolderOpen, Home, LogOut, Moon, Shield, Sun, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { removeToken } from "@/lib/auth";
 
@@ -12,6 +12,7 @@ const navItems = [
   { href: "/process", label: "Audio / Video", icon: Upload },
   { href: "/documents", label: "Documentos", icon: FileText },
   { href: "/ml", label: "ML & Analytics", icon: Brain },
+  { href: "/files", label: "Archivos", icon: FolderOpen },
 ] as const;
 
 export function Sidebar() {

@@ -22,7 +22,30 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { Brain, TrendingUp, Network, BookOpen, Loader2, AlertCircle } from "lucide-react";
+import { Brain, TrendingUp, Network, BookOpen, Loader2, AlertCircle, ChevronDown, ChevronUp, HelpCircle } from "lucide-react";
+
+// ── Help section component ────────────────────────────────────────────────────
+function HelpSection({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border border-amber-100 bg-amber-50/60 dark:border-amber-500/20 dark:bg-amber-500/5 mb-4">
+      <button
+        type="button"
+        className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium text-amber-800 dark:text-amber-300 hover:bg-amber-100/60 dark:hover:bg-amber-500/10 transition-colors rounded-xl"
+        onClick={() => setOpen(!open)}
+      >
+        <HelpCircle className="h-4 w-4 shrink-0" />
+        <span className="flex-1 text-left">¿Cómo funciona?</span>
+        {open ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
+      </button>
+      {open && (
+        <div className="px-4 pb-4 text-sm text-amber-900 dark:text-amber-200 space-y-2 leading-relaxed">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Insights Tab ──────────────────────────────────────────────────────────────
 function InsightsTab() {
@@ -66,6 +89,22 @@ function InsightsTab() {
 
   return (
     <div className="space-y-6">
+      <HelpSection>
+        <p>
+          Cada vez que un investigador confirma o rechaza una detección, el sistema anota esa decisión.
+          Los <strong>Insights</strong> muestran cuántas veces cada concepto fue confirmado ("sí, esto es
+          violencia") o rechazado ("esto es un falso positivo").
+        </p>
+        <p>
+          Por ejemplo: si el concepto "agresión" tiene un 80% de confirmaciones, el sistema aprende que
+          sus detecciones son fiables. Si tiene un 60% de rechazos, significa que está generando
+          demasiados falsos positivos y conviene revisar su sensibilidad.
+        </p>
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Piénsalo como un colaborador nuevo: al principio comete errores, pero con cada corrección
+          mejora su criterio.
+        </p>
+      </HelpSection>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card>
           <CardContent className="pt-6">
@@ -204,6 +243,23 @@ function ThresholdsTab() {
 
   return (
     <div className="space-y-4">
+      <HelpSection>
+        <p>
+          El <strong>umbral de detección</strong> (el nivel mínimo de certeza para marcar algo como sospechoso)
+          se ajusta automáticamente por concepto según el feedback acumulado.
+        </p>
+        <p>
+          El <strong>multiplicador</strong> es el factor de ajuste: ×1.0 = sin cambios; ×1.5 = umbral más
+          exigente (detecta menos pero con más certeza); ×0.7 = umbral más sensible (detecta más, puede
+          generar más falsos positivos). Es como regular el termómetro: puedes hacerlo más o menos
+          sensible al calor.
+        </p>
+        <p>
+          La <strong>fase</strong> indica el nivel de madurez del aprendizaje: fase 1 = pocas muestras,
+          fase 3 = modelo estabilizado. La <strong>confianza</strong> es el porcentaje de feedback
+          positivo que valida las decisiones del sistema en ese concepto.
+        </p>
+      </HelpSection>
       <p className="text-sm text-gray-500">{data.total_concepts} conceptos con multiplicadores adaptativos</p>
       <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
         <table className="w-full text-sm">
@@ -273,6 +329,22 @@ function CooccurrenceTab() {
 
   return (
     <div className="space-y-4">
+      <HelpSection>
+        <p>
+          La <strong>co-ocurrencia</strong> mide cuántas veces dos conceptos aparecen juntos en el mismo caso.
+          Es como notar que cada vez que hay una denuncia de acoso, también aparecen términos de coacción:
+          ese patrón repetido es una co-ocurrencia.
+        </p>
+        <p>
+          El porcentaje de sesiones indica en qué proporción de los casos analizados aparece esa
+          combinación. Una pareja con un 40% de sesiones es una señal fuerte de que ambos conceptos
+          se dan juntos con frecuencia en los testimonios de este corpus.
+        </p>
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Útil para identificar perfiles de casos: por ejemplo, si "grooming" y "amenaza" co-ocurren
+          frecuentemente, puede indicar un patrón de captación con presión.
+        </p>
+      </HelpSection>
       <div className="flex items-center gap-4">
         <p className="text-sm text-gray-500">
           {data.total_sessions_analyzed} sesiones analizadas
@@ -352,6 +424,36 @@ function TaxonomyTab() {
 
   return (
     <div className="space-y-4">
+      <HelpSection>
+        <p>
+          Cada concepto detectado se clasifica según marcos legales y clínicos internacionales:
+        </p>
+        <ul className="list-disc list-inside space-y-1 text-xs">
+          <li>
+            <strong>CEDAW</strong> — Convención de la ONU sobre eliminación de toda discriminación
+            contra la mujer. Sus artículos definen obligaciones de los Estados frente a la violencia
+            de género.
+          </li>
+          <li>
+            <strong>Convenio de Estambul</strong> — Tratado del Consejo de Europa (2011) que tipifica
+            y obliga a perseguir formas específicas de violencia: física, psicológica, sexual,
+            acecho (stalking), mutilación genital, matrimonio forzado.
+          </li>
+          <li>
+            <strong>ICD-11</strong> — Clasificación Internacional de Enfermedades de la OMS (versión 11).
+            Incluye códigos diagnósticos para secuelas de violencia: TEPT, daño psicológico, etc.
+          </li>
+          <li>
+            <strong>CP España</strong> — Código Penal español. Los artículos listados son los tipos
+            penales aplicables al concepto detectado (p. ej., art. 153 para violencia doméstica,
+            art. 178-180 para agresión sexual).
+          </li>
+        </ul>
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Esta información es orientativa para investigadores. No reemplaza el criterio jurídico
+          de un profesional del derecho.
+        </p>
+      </HelpSection>
       <div className="flex items-center gap-3">
         <Label htmlFor="concept-select" className="text-sm shrink-0">Filtrar concepto:</Label>
         <select
@@ -481,6 +583,32 @@ export default function MLPage() {
           Insights adaptativos, umbrales por concepto, co-ocurrencias y taxonomía normativa
         </p>
       </div>
+
+      {/* Introductory card */}
+      <Card className="border-amber-100 bg-amber-50/50 dark:border-amber-500/20 dark:bg-amber-500/5">
+        <CardContent className="pt-5 pb-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+              <Brain className="h-4 w-4" />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                ¿Qué es el ML adaptativo?
+              </p>
+              <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
+                El sistema aprende de las decisiones de los investigadores. Cada vez que confirmas o
+                rechazas una detección, esa señal ajusta automáticamente la sensibilidad del detector
+                para ese tipo de concepto.
+              </p>
+              <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
+                Es como un colaborador nuevo que al principio señala demasiadas cosas, pero con cada
+                corrección aprende a distinguir lo relevante de lo que no lo es. Con el tiempo, sus
+                detecciones se vuelven más precisas para el corpus específico de tu caso.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="insights">
         <TabsList className="grid grid-cols-4 w-full">

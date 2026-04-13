@@ -40,6 +40,7 @@ export interface ProcessResponse {
   matches: KeywordMatch[];
   review_candidates: ReviewCandidate[];
   clips: ClipResult[];
+  transcript_text: string | null;
 }
 
 export interface DocumentMatch extends KeywordMatch {
@@ -273,7 +274,57 @@ export interface SessionSummary {
 }
 
 export interface SessionDetail extends SessionSummary {
-  detections: Array<KeywordMatch & { id: string; page_number?: number }>;
+  detections: Array<KeywordMatch & { id: string; page_number?: number; is_manual?: boolean; notes?: string }>;
+}
+
+// ── Interfaces nuevas ─────────────────────────────────────────────────────────
+
+export interface UploadResponse {
+  file_id: string;
+  filename: string;
+  source_type: string;
+  size_bytes: number;
+}
+
+export interface StoredFileRecord {
+  id: string;
+  original_filename: string;
+  stored_filename: string;
+  source_type: string;
+  size_bytes: number;
+  folder_id: string | null;
+  session_id: string | null;
+  created_at: string;
+}
+
+export interface FolderRecord {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  created_at: string;
+}
+
+export interface TranscriptResponse {
+  session_id: string;
+  language: string;
+  text: string;
+  segments: Array<{
+    id: number | null;
+    start: number;
+    end: number;
+    text: string;
+    words: Array<{ word: string; start: number | null; end: number | null; score: number | null }>;
+  }>;
+}
+
+export interface ManualDetectionBody {
+  label: string;
+  matched_term: string;
+  timestamp_start: string;
+  timestamp_end: string;
+  notes?: string;
+  source: "transcript" | "timeline";
+  language?: string;
 }
 
 export const apiListSessions = (sourceTypes: string[], skip = 0, limit = 20) => {
@@ -286,5 +337,58 @@ export const apiListSessions = (sourceTypes: string[], skip = 0, limit = 20) => 
 
 export const apiGetSession = (id: string) =>
   api.get<SessionDetail>(`/sessions/${id}`).then((r) => r.data);
+
+// ── Upload en 2 pasos ─────────────────────────────────────────────────────────
+
+export const apiUpload = (file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+  return api.post<UploadResponse>("/upload", form).then((r) => r.data);
+};
+
+export const apiAnalyze = (file_id: string, language: string, profile: string) =>
+  api.post<ProcessResponse>("/analyze", { file_id, language, profile }).then((r) => r.data);
+
+export const apiAnalyzeDocument = (file_id: string, language: string, profile: string) =>
+  api.post<DocumentProcessResponse>("/analyze-document", { file_id, language, profile }).then((r) => r.data);
+
+// ── Transcripción y detección manual ─────────────────────────────────────────
+
+export const apiGetSessionTranscript = (session_id: string) =>
+  api.get<TranscriptResponse>(`/sessions/${session_id}/transcript`).then((r) => r.data);
+
+export const apiCreateManualDetection = (session_id: string, body: ManualDetectionBody) =>
+  api.post<{ ok: boolean; detection_id: string }>(`/sessions/${session_id}/manual-detection`, body).then((r) => r.data);
+
+// ── Gestión de archivos ───────────────────────────────────────────────────────
+
+export const apiListFiles = (params?: {
+  folder_id?: string;
+  source_type?: string[];
+  skip?: number;
+  limit?: number;
+}) => {
+  const p = new URLSearchParams();
+  if (params?.folder_id) p.set("folder_id", params.folder_id);
+  params?.source_type?.forEach((t) => p.append("source_type", t));
+  if (params?.skip != null) p.set("skip", String(params.skip));
+  if (params?.limit != null) p.set("limit", String(params.limit));
+  return api.get<StoredFileRecord[]>(`/files?${p}`).then((r) => r.data);
+};
+
+export const apiDeleteFile = (file_id: string) =>
+  api.delete<{ ok: boolean }>(`/files/${file_id}`).then((r) => r.data);
+
+export const apiMoveFile = (file_id: string, folder_id: string | null) =>
+  api.patch<StoredFileRecord>(`/files/${file_id}/folder`, { folder_id }).then((r) => r.data);
+
+export const apiListFolders = () =>
+  api.get<FolderRecord[]>("/files/folders").then((r) => r.data);
+
+export const apiCreateFolder = (name: string, parent_id: string | null = null) =>
+  api.post<FolderRecord>("/files/folders", { name, parent_id }).then((r) => r.data);
+
+export const apiDeleteFolder = (folder_id: string) =>
+  api.delete<{ ok: boolean }>(`/files/folders/${folder_id}`).then((r) => r.data);
 
 export default api;
