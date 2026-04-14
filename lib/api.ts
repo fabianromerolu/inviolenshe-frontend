@@ -70,6 +70,7 @@ export interface DocumentProcessResponse {
 }
 
 export interface KeywordMatch {
+  id?: string;
   label: string;
   matched_term: string;
   matched_span: string;
