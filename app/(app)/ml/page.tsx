@@ -92,11 +92,11 @@ function InsightsTab() {
       <HelpSection>
         <p>
           Cada vez que un investigador confirma o rechaza una detección, el sistema anota esa decisión.
-          Los <strong>Insights</strong> muestran cuántas veces cada concepto fue confirmado ("sí, esto es
-          violencia") o rechazado ("esto es un falso positivo").
+          Los <strong>Insights</strong> muestran cuántas veces cada concepto fue confirmado
+          (&ldquo;sí, esto es violencia&rdquo;) o rechazado (&ldquo;esto es un falso positivo&rdquo;).
         </p>
         <p>
-          Por ejemplo: si el concepto "agresión" tiene un 80% de confirmaciones, el sistema aprende que
+          Por ejemplo: si el concepto &ldquo;agresión&rdquo; tiene un 80% de confirmaciones, el sistema aprende que
           sus detecciones son fiables. Si tiene un 60% de rechazos, significa que está generando
           demasiados falsos positivos y conviene revisar su sensibilidad.
         </p>
@@ -341,7 +341,7 @@ function CooccurrenceTab() {
           se dan juntos con frecuencia en los testimonios de este corpus.
         </p>
         <p className="text-xs text-amber-700 dark:text-amber-400">
-          Útil para identificar perfiles de casos: por ejemplo, si "grooming" y "amenaza" co-ocurren
+          Útil para identificar perfiles de casos: por ejemplo, si &ldquo;grooming&rdquo; y &ldquo;amenaza&rdquo; co-ocurren
           frecuentemente, puede indicar un patrón de captación con presión.
         </p>
       </HelpSection>

@@ -340,9 +340,12 @@ export const apiGetSession = (id: string) =>
 
 // ── Upload en 2 pasos ─────────────────────────────────────────────────────────
 
-export const apiUpload = (file: File) => {
+export const apiUpload = (file: File, folder_id?: string | null) => {
   const form = new FormData();
   form.append("file", file);
+  if (folder_id) {
+    form.append("folder_id", folder_id);
+  }
   return api.post<UploadResponse>("/upload", form).then((r) => r.data);
 };
 
@@ -376,6 +379,9 @@ export const apiListFiles = (params?: {
   return api.get<StoredFileRecord[]>(`/files?${p}`).then((r) => r.data);
 };
 
+export const apiGetFile = (file_id: string) =>
+  api.get<StoredFileRecord>(`/files/${file_id}`).then((r) => r.data);
+
 export const apiDeleteFile = (file_id: string) =>
   api.delete<{ ok: boolean }>(`/files/${file_id}`).then((r) => r.data);
 
@@ -387,6 +393,9 @@ export const apiListFolders = () =>
 
 export const apiCreateFolder = (name: string, parent_id: string | null = null) =>
   api.post<FolderRecord>("/files/folders", { name, parent_id }).then((r) => r.data);
+
+export const apiMoveFolder = (folder_id: string, parent_id: string | null) =>
+  api.patch<FolderRecord>(`/files/folders/${folder_id}/parent`, { parent_id }).then((r) => r.data);
 
 export const apiDeleteFolder = (folder_id: string) =>
   api.delete<{ ok: boolean }>(`/files/folders/${folder_id}`).then((r) => r.data);
