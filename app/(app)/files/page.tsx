@@ -29,6 +29,7 @@ import {
   ChevronDown,
   CheckCircle,
   Clock,
+  GripVertical,
 } from "lucide-react";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -67,6 +68,10 @@ function analyzeRoute(sourceType: string): "/process" | "/documents" {
   return sourceType === "audio" || sourceType === "video" ? "/process" : "/documents";
 }
 
+// ── Drag context: store file_id being dragged ─────────────────────────────────
+
+const DRAG_KEY = "file_id";
+
 // ── Folder tree ────────────────────────────────────────────────────────────────
 
 interface TreeNode extends FolderRecord {
@@ -92,25 +97,39 @@ interface FolderNodeProps {
   selected: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onDropFile: (fileId: string, folderId: string | null) => void;
   depth?: number;
 }
 
-function FolderNode({ node, selected, onSelect, onDelete, depth = 0 }: FolderNodeProps) {
+function FolderNode({ node, selected, onSelect, onDelete, onDropFile, depth = 0 }: FolderNodeProps) {
   const [expanded, setExpanded] = useState(true);
+  const [dragOver, setDragOver] = useState(false);
   const hasChildren = node.children.length > 0;
   const isSelected = selected === node.id;
+
+  const depthClass = depth === 0 ? "pl-2" : depth === 1 ? "pl-6" : depth === 2 ? "pl-10" : "pl-14";
 
   return (
     <div>
       <div
         className={[
-          "flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer select-none transition-colors group",
-          depth === 0 ? "pl-2" : depth === 1 ? "pl-6" : depth === 2 ? "pl-10" : "pl-14",
-          isSelected
+          "flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer select-none transition-all group",
+          depthClass,
+          dragOver
+            ? "bg-blue-100 text-blue-800 ring-1 ring-blue-300 dark:bg-blue-500/20 dark:text-blue-300 dark:ring-blue-500/30"
+            : isSelected
             ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
             : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5",
         ].join(" ")}
         onClick={() => onSelect(node.id)}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const fileId = e.dataTransfer.getData(DRAG_KEY);
+          if (fileId) onDropFile(fileId, node.id);
+        }}
       >
         <button
           type="button"
@@ -121,9 +140,11 @@ function FolderNode({ node, selected, onSelect, onDelete, depth = 0 }: FolderNod
             ? expanded
               ? <ChevronDown className="h-3.5 w-3.5" />
               : <ChevronRight className="h-3.5 w-3.5" />
-            : <span className="w-3.5" />}
+            : <span className="w-3.5 inline-block" />}
         </button>
-        {isSelected ? (
+        {dragOver ? (
+          <FolderOpen className="h-4 w-4 shrink-0 text-blue-500" />
+        ) : isSelected ? (
           <FolderOpen className="h-4 w-4 shrink-0 text-rose-500" />
         ) : (
           <Folder className="h-4 w-4 shrink-0 text-slate-400" />
@@ -147,11 +168,48 @@ function FolderNode({ node, selected, onSelect, onDelete, depth = 0 }: FolderNod
               selected={selected}
               onSelect={onSelect}
               onDelete={onDelete}
+              onDropFile={onDropFile}
               depth={depth + 1}
             />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Root drop zone (moves file out of any folder) ─────────────────────────────
+
+interface RootDropZoneProps {
+  selected: boolean;
+  onClick: () => void;
+  onDropFile: (fileId: string, folderId: string | null) => void;
+}
+
+function RootDropZone({ selected, onClick, onDropFile }: RootDropZoneProps) {
+  const [dragOver, setDragOver] = useState(false);
+  return (
+    <div
+      className={[
+        "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer select-none transition-all mb-1",
+        dragOver
+          ? "bg-blue-100 text-blue-800 ring-1 ring-blue-300 dark:bg-blue-500/20 dark:text-blue-300 dark:ring-blue-500/30"
+          : selected
+          ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
+          : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5",
+      ].join(" ")}
+      onClick={onClick}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const fileId = e.dataTransfer.getData(DRAG_KEY);
+        if (fileId) onDropFile(fileId, null);
+      }}
+    >
+      <FolderOpen className="h-4 w-4 shrink-0 text-slate-400" />
+      <span className="font-medium text-sm">Todos los archivos</span>
     </div>
   );
 }
@@ -167,11 +225,30 @@ interface FileCardProps {
 }
 
 function FileCard({ file, folders, onDelete, onMove, onAnalyze }: FileCardProps) {
+  const [dragging, setDragging] = useState(false);
   const analyzed = !!file.session_id;
 
   return (
-    <div className="rounded-xl border border-black/[0.07] bg-white/74 p-4 shadow-sm dark:border-white/10 dark:bg-white/5 flex flex-col gap-3 hover:shadow-md transition-shadow">
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_KEY, file.id);
+        e.dataTransfer.effectAllowed = "move";
+        setDragging(true);
+      }}
+      onDragEnd={() => setDragging(false)}
+      className={[
+        "rounded-xl border bg-white/74 p-4 shadow-sm flex flex-col gap-3 transition-all",
+        dragging
+          ? "opacity-50 scale-95 border-blue-300 shadow-lg dark:border-blue-500/40"
+          : "border-black/[0.07] hover:shadow-md dark:border-white/10 dark:bg-white/5",
+      ].join(" ")}
+    >
       <div className="flex items-start gap-3">
+        {/* Drag handle */}
+        <div className="flex items-center self-stretch pr-1 cursor-grab text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400">
+          <GripVertical className="h-4 w-4" />
+        </div>
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 ring-1 ring-black/[0.05] dark:bg-white/8 dark:text-slate-300 dark:ring-white/10">
           <FileTypeIcon type={file.source_type} className="h-5 w-5" />
         </div>
@@ -286,20 +363,21 @@ export default function FilesPage() {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
-  const invalidate = () => {
+  const invalidateFiles = () => qc.invalidateQueries({ queryKey: ["files"] });
+  const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ["files"] });
     qc.invalidateQueries({ queryKey: ["folders"] });
   };
 
-  const deleteFileMut = useMutation({
-    mutationFn: apiDeleteFile,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["files"] }),
-  });
-
   const moveFileMut = useMutation({
     mutationFn: ({ fileId, folderId }: { fileId: string; folderId: string | null }) =>
       apiMoveFile(fileId, folderId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["files"] }),
+    onSuccess: invalidateFiles,
+  });
+
+  const deleteFileMut = useMutation({
+    mutationFn: apiDeleteFile,
+    onSuccess: invalidateFiles,
   });
 
   const createFolderMut = useMutation({
@@ -307,7 +385,7 @@ export default function FilesPage() {
     onSuccess: () => {
       setNewFolderName("");
       setShowNewFolder(false);
-      invalidate();
+      invalidateAll();
     },
   });
 
@@ -315,7 +393,7 @@ export default function FilesPage() {
     mutationFn: apiDeleteFolder,
     onSuccess: () => {
       if (selectedFolder) setSelectedFolder(null);
-      invalidate();
+      invalidateAll();
     },
     onError: (err: unknown) => {
       const msg =
@@ -328,9 +406,12 @@ export default function FilesPage() {
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
+  function handleMove(fileId: string, folderId: string | null) {
+    moveFileMut.mutate({ fileId, folderId });
+  }
+
   function handleAnalyze(file: StoredFileRecord) {
-    const route = analyzeRoute(file.source_type);
-    router.push(`${route}?file_id=${file.id}`);
+    router.push(`${analyzeRoute(file.source_type)}?file_id=${file.id}`);
   }
 
   function handleCreateFolder(e: React.FormEvent) {
@@ -374,18 +455,12 @@ export default function FilesPage() {
             </form>
           )}
 
-          {/* Root: all files */}
-          <div
-            className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer select-none transition-colors mb-1 ${
-              selectedFolder === null
-                ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
-                : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5"
-            }`}
+          {/* Root: all files — also a drop target */}
+          <RootDropZone
+            selected={selectedFolder === null}
             onClick={() => setSelectedFolder(null)}
-          >
-            <FolderOpen className="h-4 w-4 shrink-0 text-slate-400" />
-            <span className="font-medium text-sm">Todos los archivos</span>
-          </div>
+            onDropFile={handleMove}
+          />
 
           {tree.map((node) => (
             <FolderNode
@@ -394,6 +469,7 @@ export default function FilesPage() {
               selected={selectedFolder}
               onSelect={setSelectedFolder}
               onDelete={(id) => deleteFolderMut.mutate(id)}
+              onDropFile={handleMove}
             />
           ))}
 
@@ -402,6 +478,10 @@ export default function FilesPage() {
               Sin carpetas. Crea una con +
             </p>
           )}
+
+          <p className="text-xs text-slate-400 px-1 pt-3 pb-1 leading-tight">
+            Arrastra archivos sobre una carpeta para moverlos
+          </p>
         </div>
       </aside>
 
@@ -476,7 +556,7 @@ export default function FilesPage() {
                 file={file}
                 folders={folders}
                 onDelete={(id) => deleteFileMut.mutate(id)}
-                onMove={(fileId, folderId) => moveFileMut.mutate({ fileId, folderId })}
+                onMove={handleMove}
                 onAnalyze={handleAnalyze}
               />
             ))}
