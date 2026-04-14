@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -427,7 +427,7 @@ function MyFilesTab({
 
 type UploadStep = "idle" | "uploaded" | "analyzing" | "done";
 
-export default function ProcessPage() {
+function ProcessPageInner() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
 
@@ -664,5 +664,13 @@ export default function ProcessPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+export default function ProcessPage() {
+  return (
+    <Suspense>
+      <ProcessPageInner />
+    </Suspense>
   );
 }

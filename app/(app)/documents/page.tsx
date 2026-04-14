@@ -463,7 +463,7 @@ export default function DocumentsPage() {
                       description="El archivo se sube primero y luego puedes lanzar el analisis."
                       helper="Todavia no has seleccionado un documento."
                       chips={["PDF", "TXT", "DOCX", "Hasta 500 MB"]}
-                      variant="document"
+                      variant="docs"
                     />
                   </div>
                   <div className="flex justify-end">

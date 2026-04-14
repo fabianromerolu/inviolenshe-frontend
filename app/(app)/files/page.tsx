@@ -24,19 +24,12 @@ import {
   FileTextIcon,
   FileIcon,
   Trash2,
-  MoveRight,
   Plus,
   ChevronRight,
   ChevronDown,
   CheckCircle,
   Clock,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -110,12 +103,13 @@ function FolderNode({ node, selected, onSelect, onDelete, depth = 0 }: FolderNod
   return (
     <div>
       <div
-        className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer select-none transition-colors group ${
+        className={[
+          "flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer select-none transition-colors group",
+          depth === 0 ? "pl-2" : depth === 1 ? "pl-6" : depth === 2 ? "pl-10" : "pl-14",
           isSelected
             ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
-            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5"
-        }`}
-        style={{ paddingLeft: `${0.5 + depth * 1}rem` }}
+            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5",
+        ].join(" ")}
         onClick={() => onSelect(node.id)}
       >
         <button
@@ -216,24 +210,21 @@ function FileCard({ file, folders, onDelete, onMove, onAnalyze }: FileCardProps)
           </Button>
         )}
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1">
-              <MoveRight className="h-3.5 w-3.5" />
-              Mover
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onClick={() => onMove(file.id, null)}>
-              <FolderOpen className="h-4 w-4 mr-2" /> Sin carpeta
-            </DropdownMenuItem>
-            {folders.map((f) => (
-              <DropdownMenuItem key={f.id} onClick={() => onMove(file.id, f.id)}>
-                <Folder className="h-4 w-4 mr-2" /> {f.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <select
+          aria-label="Mover a carpeta"
+          className="h-7 rounded-md border border-input bg-background px-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer"
+          value=""
+          onChange={(e) => {
+            const val = e.target.value;
+            onMove(file.id, val === "__none__" ? null : val);
+          }}
+        >
+          <option value="" disabled>Mover a…</option>
+          <option value="__none__">Sin carpeta</option>
+          {folders.map((f) => (
+            <option key={f.id} value={f.id}>{f.name}</option>
+          ))}
+        </select>
 
         <Button
           type="button"
