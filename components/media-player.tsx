@@ -1,22 +1,39 @@
 "use client";
-import { useRef, useState, useEffect, useMemo, useCallback } from "react";
-import type { KeywordMatch, ManualDetectionBody } from "@/lib/api";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { apiCreateManualDetection } from "@/lib/api";
+import type { KeywordMatch, ManualDetectionBody, ReviewCandidate } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Play, Pause, Volume2, VolumeX } from "lucide-react";
 
 interface MediaPlayerProps {
   file: File;
   duration: number;
   matches: KeywordMatch[];
+  reviewCandidates?: ReviewCandidate[];
   sourceType: "audio" | "video";
   sessionId?: string;
   onManualDetectionCreated?: () => void;
+}
+
+interface TimelineItem {
+  key: string;
+  kind: "match" | "review";
+  startSec: number;
+  endSec: number;
+  timestamp_start: string;
+  timestamp_end: string;
+  badgeLabel: string;
+  primaryText: string;
+  secondaryText?: string;
+  title: string;
+  toneClassName: string;
+  color: string;
 }
 
 function parseTimestamp(ts: string): number {
@@ -50,6 +67,7 @@ export function MediaPlayer({
   file,
   duration,
   matches,
+  reviewCandidates = [],
   sourceType,
   sessionId,
   onManualDetectionCreated,
@@ -60,8 +78,9 @@ export function MediaPlayer({
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [activeMatch, setActiveMatch] = useState<string | null>(null);
+  const [mediaDuration, setMediaDuration] = useState<number | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
 
-  // Timeline drag state for manual detection
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartSec, setDragStartSec] = useState<number | null>(null);
   const [dragEndSec, setDragEndSec] = useState<number | null>(null);
@@ -75,22 +94,85 @@ export function MediaPlayer({
   });
   const [submitting, setSubmitting] = useState(false);
 
-  const src = useMemo(() => URL.createObjectURL(file), [file]);
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file);
+    setSrc(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [file]);
 
   useEffect(() => {
-    return () => URL.revokeObjectURL(src);
+    setCurrentTime(0);
+    setPlaying(false);
+    setActiveMatch(null);
+    setMediaDuration(null);
   }, [src]);
 
-  const totalDuration = duration > 0 ? duration : 1;
+  useEffect(() => {
+    if (!src || !mediaRef.current) return;
+    mediaRef.current.load();
+  }, [src]);
+
+  const timelineItems = useMemo<TimelineItem[]>(
+    () =>
+      [
+        ...matches.map((match, index) => ({
+          key: `match-${match.id ?? index}-${match.timestamp_start}`,
+          kind: "match" as const,
+          startSec: parseTimestamp(match.timestamp_start),
+          endSec: parseTimestamp(match.timestamp_end),
+          timestamp_start: match.timestamp_start,
+          timestamp_end: match.timestamp_end,
+          badgeLabel: match.label,
+          primaryText: match.matched_term,
+          secondaryText: undefined,
+          title: `${match.label} - "${match.matched_term}" (${match.timestamp_start})`,
+          toneClassName: SEVERITY_BG[match.severity] || "bg-gray-50 border-gray-200 text-gray-800",
+          color: SEVERITY_COLORS[match.severity] || "#64748b",
+        })),
+        ...reviewCandidates.map((candidate, index) => ({
+          key: `review-${index}-${candidate.timestamp_start}-${candidate.detected_word}`,
+          kind: "review" as const,
+          startSec: parseTimestamp(candidate.timestamp_start),
+          endSec: parseTimestamp(candidate.timestamp_end),
+          timestamp_start: candidate.timestamp_start,
+          timestamp_end: candidate.timestamp_end,
+          badgeLabel: candidate.label,
+          primaryText: candidate.detected_word,
+          secondaryText: `Sugerido: ${candidate.suggested_term} (${Math.round(candidate.similarity * 100)}%)`,
+          title: `${candidate.label} - "${candidate.detected_word}" -> "${candidate.suggested_term}" (${Math.round(candidate.similarity * 100)}%)`,
+          toneClassName: "bg-sky-50 border-sky-200 text-sky-800",
+          color: "#0ea5e9",
+        })),
+      ].sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec),
+    [matches, reviewCandidates]
+  );
+
+  const maxMatchTime = useMemo(
+    () => timelineItems.reduce((max, item) => Math.max(max, item.startSec, item.endSec), 0),
+    [timelineItems]
+  );
+
+  const fallbackDuration = Math.max(duration || 0, maxMatchTime, 1);
+  const totalDuration =
+    mediaDuration && Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : fallbackDuration;
+
+  const syncMediaDuration = useCallback(() => {
+    const nextDuration = mediaRef.current?.duration;
+    if (nextDuration && Number.isFinite(nextDuration) && nextDuration > 0) {
+      setMediaDuration(nextDuration);
+    }
+  }, []);
 
   const handleTimeUpdate = () => {
     if (!mediaRef.current) return;
+    syncMediaDuration();
     const t = mediaRef.current.currentTime;
     setCurrentTime(t);
-    const active = matches.find(
-      (m) => parseTimestamp(m.timestamp_start) <= t && t <= parseTimestamp(m.timestamp_end)
-    );
-    setActiveMatch(active ? active.matched_term : null);
+    const active = timelineItems.find((item) => item.startSec <= t && t <= item.endSec);
+    setActiveMatch(active ? (active.kind === "review" ? `Revision: ${active.primaryText}` : active.primaryText) : null);
   };
 
   const seekTo = useCallback(
@@ -101,8 +183,6 @@ export function MediaPlayer({
     },
     [playing]
   );
-
-  // ── Timeline pointer events ────────────────────────────────────────────────
 
   function getRatioFromEvent(e: React.PointerEvent<HTMLDivElement>): number {
     const bar = progressBarRef.current;
@@ -137,14 +217,11 @@ export function MediaPlayer({
     const diff = Math.abs(endSec - start);
 
     if (diff > 0.2 && sessionId) {
-      // Open manual detection modal pre-filled with time range
       const ts = secondsToTimestamp(Math.min(start, endSec));
       const te = secondsToTimestamp(Math.max(start, endSec));
       setManualForm({ label: "", matched_term: "", timestamp_start: ts, timestamp_end: te, notes: "" });
       setShowManualModal(true);
-    } else {
-      // Regular click → seek
-      if (!mediaRef.current) return;
+    } else if (mediaRef.current) {
       mediaRef.current.currentTime = endSec;
     }
   }
@@ -174,14 +251,17 @@ export function MediaPlayer({
     }
   }
 
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (!mediaRef.current) return;
-    if (playing) {
+    if (!mediaRef.current.paused) {
       mediaRef.current.pause();
     } else {
-      mediaRef.current.play().catch(() => {});
+      try {
+        await mediaRef.current.play();
+      } catch {
+        setPlaying(false);
+      }
     }
-    setPlaying(!playing);
   };
 
   const toggleMute = () => {
@@ -196,9 +276,7 @@ export function MediaPlayer({
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
-  const progressPct = (currentTime / totalDuration) * 100;
-
-  // Drag overlay percentages
+  const progressPct = Math.min((currentTime / totalDuration) * 100, 100);
   const dragMinPct =
     dragStartSec !== null && dragEndSec !== null
       ? (Math.min(dragStartSec, dragEndSec) / totalDuration) * 100
@@ -210,125 +288,132 @@ export function MediaPlayer({
 
   return (
     <div className="space-y-4">
-      {/* Reproductor */}
-      <div className="rounded-xl overflow-hidden bg-gray-950 border border-gray-800">
-        {sourceType === "video" ? (
+      <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-950">
+        {!src ? (
+          <div className="flex min-h-36 items-center justify-center px-4 py-8 text-sm text-gray-400">
+            Preparando archivo...
+          </div>
+        ) : sourceType === "video" ? (
           <video
+            key={src}
             ref={mediaRef as React.RefObject<HTMLVideoElement>}
             src={src}
+            preload="metadata"
             onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={syncMediaDuration}
+            onDurationChange={syncMediaDuration}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
-            className="w-full max-h-64 object-contain"
+            className="max-h-64 w-full object-contain"
           />
         ) : (
           <audio
+            key={src}
             ref={mediaRef as React.RefObject<HTMLAudioElement>}
             src={src}
+            preload="metadata"
             onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={syncMediaDuration}
+            onDurationChange={syncMediaDuration}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
           />
         )}
 
-        {/* Controles */}
-        <div className="px-4 pb-4 pt-3 space-y-2">
+        <div className="space-y-2 px-4 pb-4 pt-3">
           {sessionId && (
             <p className="text-xs text-gray-500">
-              Arrastra en la barra para marcar un rango como detección manual
+              Arrastra en la barra para marcar un rango como deteccion manual
             </p>
           )}
-          {/* Barra de progreso con marcadores */}
+
           <div
             ref={progressBarRef}
-            className="relative h-5 cursor-crosshair group select-none"
+            className="group relative h-5 cursor-crosshair select-none"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
           >
-            {/* Track fondo */}
-            <div className="absolute inset-y-1.5 inset-x-0 bg-gray-700 rounded-full" />
-            {/* Progreso */}
+            <div className="absolute inset-x-0 inset-y-1.5 rounded-full bg-gray-700" />
             <div
-              className="absolute inset-y-1.5 left-0 bg-rose-500 rounded-full transition-all pointer-events-none"
+              className="pointer-events-none absolute inset-y-1.5 left-0 rounded-full bg-rose-500 transition-all"
               style={{ width: `${progressPct}%` }}
             />
-            {/* Marcadores de detecciones */}
-            {matches.map((m, i) => {
-              const startPct = (parseTimestamp(m.timestamp_start) / totalDuration) * 100;
-              const endPct = (parseTimestamp(m.timestamp_end) / totalDuration) * 100;
-              const color = SEVERITY_COLORS[m.severity] || "#64748b";
+
+            {timelineItems.map((item) => {
+              const startPct = Math.min((item.startSec / totalDuration) * 100, 100);
+              const endPct = Math.min((item.endSec / totalDuration) * 100, 100);
               return (
                 <div
-                  key={i}
-                  className="absolute inset-y-0 pointer-events-none"
+                  key={item.key}
+                  className="pointer-events-none absolute inset-y-0"
                   style={{ left: `${startPct}%`, width: `${Math.max(endPct - startPct, 0.5)}%` }}
-                  title={`${m.label} — "${m.matched_term}" (${m.timestamp_start})`}
+                  title={item.title}
                 >
                   <div
-                    className="absolute inset-y-0 w-full rounded-sm opacity-70"
-                    style={{ backgroundColor: color }}
+                    className="absolute inset-y-0 w-full rounded-sm opacity-80"
+                    style={{
+                      background:
+                        item.kind === "review"
+                          ? "repeating-linear-gradient(135deg, rgba(14,165,233,0.95) 0 4px, rgba(56,189,248,0.55) 4px 8px)"
+                          : item.color,
+                    }}
                   />
                 </div>
               );
             })}
-            {/* Drag selection overlay */}
+
             {dragMinPct !== null && dragMaxPct !== null && dragMaxPct - dragMinPct > 0.1 && (
               <div
-                className="absolute inset-y-0 bg-blue-400/30 border-x border-blue-400 pointer-events-none"
+                className="pointer-events-none absolute inset-y-0 border-x border-blue-400 bg-blue-400/30"
                 style={{ left: `${dragMinPct}%`, width: `${dragMaxPct - dragMinPct}%` }}
               />
             )}
-            {/* Cabezal */}
+
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg -translate-x-1/2 pointer-events-none"
+              className="pointer-events-none absolute bottom-0 top-0 w-0.5 -translate-x-1/2 bg-white shadow-lg"
               style={{ left: `${progressPct}%` }}
             />
           </div>
 
-          {/* Botones + tiempo */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={togglePlay}
-              className="text-white hover:text-rose-400 transition-colors"
-            >
+            <button onClick={togglePlay} className="text-white transition-colors hover:text-rose-400">
               {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
             </button>
-            <button
-              onClick={toggleMute}
-              className="text-gray-400 hover:text-white transition-colors"
-            >
+            <button onClick={toggleMute} className="text-gray-400 transition-colors hover:text-white">
               {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
             </button>
-            <span className="text-xs text-gray-400 font-mono">
+            <span className="font-mono text-xs text-gray-400">
               {formatTime(currentTime)} / {formatTime(totalDuration)}
             </span>
             {activeMatch && (
-              <span className="ml-auto text-xs text-rose-400 font-medium truncate max-w-[200px]">
-                ● {activeMatch}
+              <span className="ml-auto max-w-[240px] truncate text-xs font-medium text-rose-400">
+                * {activeMatch}
               </span>
             )}
           </div>
         </div>
       </div>
 
-      {/* Lista de detecciones como marcadores clicables */}
-      {matches.length > 0 && (
+      {timelineItems.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            Momentos detectados — clic para saltar
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Momentos detectados y similitudes - clic para saltar
           </p>
-          <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-            {matches.map((m, i) => (
+          <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+            {timelineItems.map((item) => (
               <button
-                key={i}
-                onClick={() => seekTo(parseTimestamp(m.timestamp_start))}
-                className={`w-full text-left rounded-lg border px-3 py-2 text-xs transition-colors hover:opacity-80 ${SEVERITY_BG[m.severity] || "bg-gray-50 border-gray-200"}`}
+                key={item.key}
+                onClick={() => seekTo(item.startSec)}
+                className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition-colors hover:opacity-80 ${item.toneClassName}`}
               >
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono text-gray-500">{m.timestamp_start}</span>
-                  <Badge className="text-xs px-1.5 py-0">{m.label}</Badge>
-                  <span className="font-medium">&ldquo;{m.matched_term}&rdquo;</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-gray-500">{item.timestamp_start}</span>
+                  <Badge className={`text-xs px-1.5 py-0 ${item.kind === "review" ? "bg-sky-100 text-sky-800" : ""}`}>
+                    {item.badgeLabel}
+                  </Badge>
+                  <span className="font-medium">&ldquo;{item.primaryText}&rdquo;</span>
+                  {item.secondaryText && <span className="text-[11px] text-sky-700">{item.secondaryText}</span>}
                 </div>
               </button>
             ))}
@@ -336,17 +421,16 @@ export function MediaPlayer({
         </div>
       )}
 
-      {matches.length === 0 && (
-        <p className="text-sm text-muted-foreground text-center py-2">
-          No se detectaron términos. Puedes arrastrar en el timeline para marcar manualmente.
+      {timelineItems.length === 0 && (
+        <p className="py-2 text-center text-sm text-muted-foreground">
+          No se detectaron terminos. Puedes arrastrar en el timeline para marcar manualmente.
         </p>
       )}
 
-      {/* Modal de detección manual desde timeline */}
       <Dialog open={showManualModal} onOpenChange={setShowManualModal}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Registrar detección manual</DialogTitle>
+            <DialogTitle>Registrar deteccion manual</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleManualSubmit} className="space-y-3 text-sm">
             <div>
@@ -359,7 +443,7 @@ export function MediaPlayer({
               />
             </div>
             <div>
-              <Label>Término detectado *</Label>
+              <Label>Termino detectado *</Label>
               <Input
                 value={manualForm.matched_term}
                 onChange={(e) => setManualForm((f) => ({ ...f, matched_term: e.target.value }))}

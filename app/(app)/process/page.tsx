@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   apiAnalyze,
+  apiDownloadStoredFile,
   apiExportSession,
   apiFeedback,
   apiGetFile,
@@ -18,6 +19,7 @@ import {
   type SessionDetail,
   type SessionSummary,
   type StoredFileRecord,
+  type TranscriptResponse,
   type UploadResponse,
 } from "@/lib/api";
 import { useUploadStore } from "@/lib/upload-store";
@@ -67,6 +69,34 @@ function toUploadInfo(file: StoredFileRecord): UploadResponse {
     filename: file.original_filename,
     source_type: file.source_type,
     size_bytes: file.size_bytes,
+  };
+}
+
+function buildSessionProcessResult(detail: SessionDetail, transcript: TranscriptResponse | null): ProcessResponse {
+  const confirmedMatches = detail.detections.filter((detection) => {
+    if (!transcript?.review_candidates?.length) return true;
+
+    return !transcript.review_candidates.some(
+      (candidate) =>
+        candidate.timestamp_start === detection.timestamp_start &&
+        candidate.timestamp_end === detection.timestamp_end &&
+        candidate.suggested_term === detection.matched_term &&
+        !detection.matched_span
+    );
+  });
+
+  return {
+    session_id: detail.id,
+    filename: detail.filename,
+    language: detail.language,
+    duration_seconds: detail.duration_seconds,
+    transcript_path: "",
+    total_matches: detail.total_matches,
+    total_review_candidates: transcript?.review_candidates?.length ?? detail.total_review_candidates,
+    matches: confirmedMatches as KeywordMatch[],
+    review_candidates: transcript?.review_candidates ?? [],
+    clips: transcript?.clips ?? [],
+    transcript_text: transcript?.text ?? null,
   };
 }
 
@@ -156,15 +186,17 @@ function MatchCard({
 function ResultPanel({
   result,
   file,
+  sourceType,
   onFeedback,
   onManualDetectionCreated,
 }: {
   result: ProcessResponse;
   file: File | null;
+  sourceType?: "audio" | "video";
   onFeedback: (id: string, action: string) => void;
   onManualDetectionCreated?: () => void;
 }) {
-  const sourceType = file?.type.startsWith("video") ? "video" : "audio";
+  const resolvedSourceType = sourceType ?? (file?.type.startsWith("video") ? "video" : "audio");
   const [isExporting, setIsExporting] = useState(false);
 
   return (
@@ -174,7 +206,7 @@ function ResultPanel({
           <h2 className="text-lg font-semibold dark:text-white">{result.filename}</h2>
           <p className="text-sm text-gray-500">
             {result.total_matches} detecciones - {result.total_review_candidates} para revisar -{" "}
-            {result.duration_seconds?.toFixed(1) ?? "-"}s
+            procesado en {result.duration_seconds?.toFixed(1) ?? "-"}s
           </p>
         </div>
         {result.session_id && (
@@ -198,16 +230,17 @@ function ResultPanel({
       </div>
 
       {file && result.duration_seconds > 0 && (
-        <Card>
+          <Card>
           <CardHeader>
-            <CardTitle className="text-sm">Reproductor con marcadores de deteccion</CardTitle>
+            <CardTitle className="text-sm">Reproductor con marcadores de detecciones y similitudes</CardTitle>
           </CardHeader>
           <CardContent>
             <MediaPlayer
               file={file}
               duration={result.duration_seconds}
               matches={result.matches}
-              sourceType={sourceType}
+              reviewCandidates={result.review_candidates}
+              sourceType={resolvedSourceType}
               sessionId={result.session_id ?? undefined}
               onManualDetectionCreated={onManualDetectionCreated}
             />
@@ -221,13 +254,14 @@ function ResultPanel({
             <CardTitle className="text-sm">Transcripcion completa</CardTitle>
             <p className="text-xs text-muted-foreground">
               Selecciona texto con el cursor y haz clic en &ldquo;Marcar manualmente&rdquo; para anadir una deteccion.
-              Los terminos detectados aparecen resaltados.
+              Las detecciones confirmadas y las similitudes por revisar aparecen resaltadas.
             </p>
           </CardHeader>
           <CardContent>
             <TranscriptViewer
               text={result.transcript_text}
               matches={result.matches}
+              reviewCandidates={result.review_candidates}
               sessionId={result.session_id!}
               language={result.language}
               onManualDetectionCreated={onManualDetectionCreated}
@@ -308,19 +342,23 @@ function HistoryTab() {
   });
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [transcriptText, setTranscriptText] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptResponse | null>(null);
+  const [sessionFile, setSessionFile] = useState<File | null>(null);
+  const feedbackMutation = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: string }) => apiFeedback(id, action),
+  });
 
   const loadSession = async (id: string) => {
     setLoadingId(id);
     try {
       const session = await apiGetSession(id);
       setDetail(session);
-      try {
-        const transcript = await apiGetSessionTranscript(id);
-        setTranscriptText(transcript.text);
-      } catch {
-        setTranscriptText(null);
-      }
+      const [loadedTranscript, loadedFile] = await Promise.all([
+        apiGetSessionTranscript(id).catch(() => null),
+        session.stored_file_id ? apiDownloadStoredFile(session.stored_file_id).catch(() => null) : Promise.resolve(null),
+      ]);
+      setTranscript(loadedTranscript);
+      setSessionFile(loadedFile);
     } finally {
       setLoadingId(null);
     }
@@ -345,32 +383,27 @@ function HistoryTab() {
   }
 
   if (detail) {
-    const fakeResult: ProcessResponse = {
-      session_id: detail.id,
-      filename: detail.filename,
-      language: detail.language,
-      duration_seconds: detail.duration_seconds,
-      transcript_path: "",
-      total_matches: detail.total_matches,
-      total_review_candidates: detail.total_review_candidates,
-      matches: detail.detections as KeywordMatch[],
-      review_candidates: [],
-      clips: [],
-      transcript_text: transcriptText,
-    };
+    const fakeResult = buildSessionProcessResult(detail, transcript);
 
     return (
       <div className="space-y-4">
         <button
           onClick={() => {
             setDetail(null);
-            setTranscriptText(null);
+            setTranscript(null);
+            setSessionFile(null);
           }}
           className="text-xs text-rose-600 underline"
         >
           Volver al historial
         </button>
-        <ResultPanel result={fakeResult} file={null} onFeedback={() => undefined} />
+        <ResultPanel
+          result={fakeResult}
+          file={sessionFile}
+          sourceType={detail.source_type as "audio" | "video"}
+          onFeedback={(id, action) => feedbackMutation.mutate({ id, action })}
+          onManualDetectionCreated={() => loadSession(detail.id)}
+        />
       </div>
     );
   }
@@ -415,12 +448,23 @@ function MyFilesTab({
   });
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptResponse | null>(null);
+  const [sessionFile, setSessionFile] = useState<File | null>(null);
+  const feedbackMutation = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: string }) => apiFeedback(id, action),
+  });
 
   const loadAnalyzed = async (sessionId: string, fileId: string) => {
     setLoadingId(fileId);
     try {
       const session = await apiGetSession(sessionId);
       setDetail(session);
+      const [loadedTranscript, loadedFile] = await Promise.all([
+        apiGetSessionTranscript(sessionId).catch(() => null),
+        apiDownloadStoredFile(fileId).catch(() => null),
+      ]);
+      setTranscript(loadedTranscript);
+      setSessionFile(loadedFile);
     } finally {
       setLoadingId(null);
     }
@@ -446,26 +490,31 @@ function MyFilesTab({
   }
 
   if (detail) {
-    const fakeResult: ProcessResponse = {
-      session_id: detail.id,
-      filename: detail.filename,
-      language: detail.language,
-      duration_seconds: detail.duration_seconds,
-      transcript_path: "",
-      total_matches: detail.total_matches,
-      total_review_candidates: detail.total_review_candidates,
-      matches: detail.detections as KeywordMatch[],
-      review_candidates: [],
-      clips: [],
-      transcript_text: null,
-    };
+    const fakeResult = buildSessionProcessResult(detail, transcript);
 
     return (
       <div className="space-y-4">
-        <button onClick={() => setDetail(null)} className="text-xs text-rose-600 underline">
+        <button
+          onClick={() => {
+            setDetail(null);
+            setTranscript(null);
+            setSessionFile(null);
+          }}
+          className="text-xs text-rose-600 underline"
+        >
           Volver a mis archivos
         </button>
-        <ResultPanel result={fakeResult} file={null} onFeedback={() => undefined} />
+        <ResultPanel
+          result={fakeResult}
+          file={sessionFile}
+          sourceType={detail.source_type as "audio" | "video"}
+          onFeedback={(id, action) => feedbackMutation.mutate({ id, action })}
+          onManualDetectionCreated={() => {
+            if (detail.stored_file_id) {
+              void loadAnalyzed(detail.id, detail.stored_file_id);
+            }
+          }}
+        />
       </div>
     );
   }
@@ -529,6 +578,7 @@ function ProcessPageInner() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const routeFileId = searchParams?.get("file_id");
+  const routeSessionId = searchParams?.get("session_id");
 
   const [activeTab, setActiveTab] = useState<ProcessTab>("process");
   const [file, setFile] = useState<File | null>(null);
@@ -542,7 +592,7 @@ function ProcessPageInner() {
 
   const routeStoredFileQuery = useQuery({
     queryKey: ["stored-file", routeFileId],
-    enabled: !!routeFileId,
+    enabled: !!routeFileId && !routeSessionId,
     queryFn: () => apiGetFile(routeFileId!),
     retry: false,
   });
@@ -551,17 +601,46 @@ function ProcessPageInner() {
     routeStoredFileQuery.data && ["audio", "video"].includes(routeStoredFileQuery.data.source_type)
       ? routeStoredFileQuery.data
       : null;
-  const preparedStoredFile = selectedStoredFile ?? routeStoredFile;
+  const resolvedRouteSessionId = routeSessionId ?? routeStoredFile?.session_id ?? null;
+  const routeStoredFileForAnalyze = routeStoredFile && !routeStoredFile.session_id ? routeStoredFile : null;
+  const routeSessionQuery = useQuery({
+    queryKey: ["session-view-av", resolvedRouteSessionId],
+    enabled: !!resolvedRouteSessionId,
+    queryFn: async () => {
+      const session = await apiGetSession(resolvedRouteSessionId!);
+      const [transcript, mediaFile] = await Promise.all([
+        apiGetSessionTranscript(resolvedRouteSessionId!).catch(() => null),
+        session.stored_file_id ? apiDownloadStoredFile(session.stored_file_id).catch(() => null) : Promise.resolve(null),
+      ]);
+
+      return { session, transcript, mediaFile };
+    },
+    retry: false,
+  });
+
+  const routeSessionView =
+    routeSessionQuery.data && ["audio", "video"].includes(routeSessionQuery.data.session.source_type)
+      ? routeSessionQuery.data
+      : null;
+  const routeSessionResult = routeSessionView
+    ? buildSessionProcessResult(routeSessionView.session, routeSessionView.transcript)
+    : null;
+  const displayedResult = result ?? routeSessionResult;
+  const displayedFile = file ?? routeSessionView?.mediaFile ?? null;
+  const preparedStoredFile = selectedStoredFile ?? routeStoredFileForAnalyze;
   const preparedUpload = uploadedInfo ?? (preparedStoredFile ? toUploadInfo(preparedStoredFile) : null);
-  const isResolvingStoredFile = !selectedStoredFile && !uploadedInfo && !!routeFileId && routeStoredFileQuery.isLoading;
+  const isResolvingStoredFile =
+    !selectedStoredFile && !uploadedInfo && !!routeFileId && !resolvedRouteSessionId && routeStoredFileQuery.isLoading;
+  const isResolvingSession = !!resolvedRouteSessionId && routeSessionQuery.isLoading;
   const hasInvalidRouteFile = !!routeFileId && routeStoredFileQuery.isSuccess && !routeStoredFile;
+  const hasInvalidRouteSession = !!resolvedRouteSessionId && routeSessionQuery.isSuccess && !routeSessionView;
 
   const uploadMutation = useMutation({
     mutationFn: (selectedFile: File) => apiUpload(selectedFile),
     onMutate: (selectedFile) => {
       const id = uuidv4();
       const mediaType = selectedFile.type.startsWith("video") ? "video" : "audio";
-      if (routeFileId) {
+      if (routeFileId || routeSessionId) {
         router.replace("/process", { scroll: false });
       }
       setResult(null);
@@ -590,8 +669,14 @@ function ProcessPageInner() {
 
   const analyzeMutation = useMutation({
     mutationFn: ({ fileId, lang, prof }: { fileId: string; lang: string; prof: string }) => apiAnalyze(fileId, lang, prof),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setResult(data);
+      if (!file && preparedStoredFile) {
+        const downloadedFile = await apiDownloadStoredFile(preparedStoredFile.id).catch(() => null);
+        if (downloadedFile) {
+          setFile(downloadedFile);
+        }
+      }
       if (currentUploadId) {
         updateUpload(currentUploadId, { status: "done", result: data, finishedAt: new Date() });
       }
@@ -610,11 +695,11 @@ function ProcessPageInner() {
     mutationFn: ({ id, action }: { id: string; action: string }) => apiFeedback(id, action),
   });
 
-  const currentStep = isResolvingStoredFile
+  const currentStep = isResolvingStoredFile || isResolvingSession
     ? "resolving"
     : analyzeMutation.isPending
       ? "analyzing"
-      : result
+      : displayedResult
         ? "done"
         : preparedUpload
           ? "uploaded"
@@ -628,7 +713,7 @@ function ProcessPageInner() {
     setCurrentUploadId(null);
     uploadMutation.reset();
     analyzeMutation.reset();
-    if (routeFileId) {
+    if (routeFileId || routeSessionId) {
       router.replace("/process", { scroll: false });
     }
   }
@@ -641,7 +726,7 @@ function ProcessPageInner() {
     setActiveTab("process");
     uploadMutation.reset();
     analyzeMutation.reset();
-    if (routeFileId) {
+    if (routeFileId || routeSessionId) {
       router.replace("/process", { scroll: false });
     }
   }
@@ -692,7 +777,9 @@ function ProcessPageInner() {
                   {currentStep === "idle"
                     ? "Paso 1 - Subir archivo"
                     : currentStep === "resolving"
-                      ? "Preparando archivo"
+                      ? resolvedRouteSessionId
+                        ? "Cargando analisis"
+                        : "Preparando archivo"
                       : currentStep === "uploaded"
                         ? "Paso 2 - Configurar y analizar"
                         : currentStep === "analyzing"
@@ -701,10 +788,10 @@ function ProcessPageInner() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-5 pt-5">
-                {(routeStoredFileQuery.isError || hasInvalidRouteFile) && (
+                {(routeStoredFileQuery.isError || routeSessionQuery.isError || hasInvalidRouteFile || hasInvalidRouteSession) && (
                   <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    No se pudo preparar el archivo solicitado para este modulo. Verifica el enlace o vuelve a seleccionarlo
-                    desde Archivos.
+                    No se pudo abrir el archivo o el analisis solicitado para este modulo. Verifica el enlace o vuelve a
+                    seleccionarlo desde Archivos.
                   </div>
                 )}
 
@@ -756,8 +843,14 @@ function ProcessPageInner() {
                 {currentStep === "resolving" && (
                   <div className="flex flex-col items-center gap-3 py-10 text-gray-500">
                     <Loader2 className="h-8 w-8 animate-spin text-rose-500" />
-                    <p className="text-sm font-medium">Buscando archivo seleccionado...</p>
-                    <p className="text-xs text-gray-400">Estamos preparando el Paso 2 para que analices sin volver a cargarlo.</p>
+                    <p className="text-sm font-medium">
+                      {resolvedRouteSessionId ? "Cargando analisis guardado..." : "Buscando archivo seleccionado..."}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {resolvedRouteSessionId
+                        ? "Estamos recuperando la evidencia y todos los datos persistidos de esta sesion."
+                        : "Estamos preparando el Paso 2 para que analices sin volver a cargarlo."}
+                    </p>
                   </div>
                 )}
 
@@ -862,12 +955,24 @@ function ProcessPageInner() {
               </CardContent>
             </Card>
 
-            {result && (
+            {displayedResult && (
               <ResultPanel
-                result={result}
-                file={file}
+                result={displayedResult}
+                file={displayedFile}
+                sourceType={
+                  routeSessionView?.session.source_type === "video" ||
+                  preparedStoredFile?.source_type === "video" ||
+                  displayedFile?.type.startsWith("video")
+                    ? "video"
+                    : "audio"
+                }
                 onFeedback={(id, action) => feedbackMutation.mutate({ id, action })}
-                onManualDetectionCreated={() => queryClient.invalidateQueries({ queryKey: ["sessions-av"] })}
+                onManualDetectionCreated={() => {
+                  queryClient.invalidateQueries({ queryKey: ["sessions-av"] });
+                  if (routeSessionView) {
+                    void routeSessionQuery.refetch();
+                  }
+                }}
               />
             )}
           </TabsContent>

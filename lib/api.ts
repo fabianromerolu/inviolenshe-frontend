@@ -221,6 +221,39 @@ function getDownloadFilename(contentDisposition: string | undefined, fallback: s
   return fallback;
 }
 
+function guessMimeType(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase();
+
+  switch (ext) {
+    case "mp4":
+      return "video/mp4";
+    case "mov":
+      return "video/quicktime";
+    case "mkv":
+      return "video/x-matroska";
+    case "webm":
+      return "video/webm";
+    case "mp3":
+      return "audio/mpeg";
+    case "wav":
+      return "audio/wav";
+    case "m4a":
+      return "audio/mp4";
+    case "ogg":
+      return "audio/ogg";
+    case "flac":
+      return "audio/flac";
+    case "pdf":
+      return "application/pdf";
+    case "txt":
+      return "text/plain";
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 export async function apiExportSession(session_id: string): Promise<void> {
   const response = await api.get<Blob>("/export", {
     params: { session_id },
@@ -275,6 +308,7 @@ export interface SessionSummary {
 }
 
 export interface SessionDetail extends SessionSummary {
+  stored_file_id?: string | null;
   detections: Array<KeywordMatch & { id: string; page_number?: number; is_manual?: boolean; notes?: string }>;
 }
 
@@ -305,8 +339,16 @@ export interface FolderRecord {
   created_at: string;
 }
 
+export interface DocumentPageContent {
+  page: number;
+  char_start: number;
+  char_end: number;
+  text: string;
+}
+
 export interface TranscriptResponse {
   session_id: string;
+  source_type?: string;
   language: string;
   text: string;
   segments: Array<{
@@ -316,6 +358,10 @@ export interface TranscriptResponse {
     text: string;
     words: Array<{ word: string; start: number | null; end: number | null; score: number | null }>;
   }>;
+  review_candidates?: ReviewCandidate[];
+  clips?: ClipResult[];
+  total_pages?: number | null;
+  document_pages?: DocumentPageContent[];
 }
 
 export interface ManualDetectionBody {
@@ -382,6 +428,24 @@ export const apiListFiles = (params?: {
 
 export const apiGetFile = (file_id: string) =>
   api.get<StoredFileRecord>(`/files/${file_id}`).then((r) => r.data);
+
+export async function apiDownloadStoredFile(file_id: string): Promise<File> {
+  const response = await api.get<Blob>(`/files/${file_id}/download`, {
+    responseType: "blob",
+  });
+
+  const filename = getDownloadFilename(
+    response.headers["content-disposition"],
+    `${file_id}.bin`
+  );
+
+  return new File([response.data], filename, {
+    type:
+      response.headers["content-type"] && response.headers["content-type"] !== "application/octet-stream"
+        ? response.headers["content-type"]
+        : guessMimeType(filename),
+  });
+}
 
 export const apiDeleteFile = (file_id: string) =>
   api.delete<{ ok: boolean }>(`/files/${file_id}`).then((r) => r.data);

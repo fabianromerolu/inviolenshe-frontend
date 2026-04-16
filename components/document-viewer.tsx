@@ -1,282 +1,294 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import type { KeywordMatch } from "@/lib/api";
+
+import { useMemo, useState } from "react";
+import type { DocumentMatch, DocumentPageContent, TranscriptResponse } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Download, FileText, Loader2 } from "lucide-react";
+import { Download, FileSearch } from "lucide-react";
 
 interface DocumentViewerProps {
-  file: File;
-  matches: Array<KeywordMatch & { page_number?: number }>;
+  filename: string;
+  sourceType: string;
+  transcript: TranscriptResponse | null;
+  matches: Array<DocumentMatch | (DocumentMatch & { page_number?: number })>;
 }
 
-// Escapa caracteres especiales de regex
-function escapeRegex(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-// Aplica highlights a texto plano usando los matched_terms
-function highlightText(text: string, terms: string[]): string {
-  if (!terms.length) return text;
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getMatchPage(match: DocumentMatch | (DocumentMatch & { page_number?: number })) {
+  return typeof match.page === "number" ? match.page : match.page_number;
+}
+
+function buildRegexHighlightedHtml(text: string, terms: string[]) {
+  if (!terms.length) return escapeHtml(text);
   const pattern = terms
+    .filter(Boolean)
     .map(escapeRegex)
-    .sort((a, b) => b.length - a.length) // longest first
+    .sort((a, b) => b.length - a.length)
     .join("|");
-  const re = new RegExp(`(${pattern})`, "gi");
-  return text.replace(re, '<mark class="bg-yellow-200 dark:bg-yellow-700 rounded px-0.5">$1</mark>');
+
+  if (!pattern) return escapeHtml(text);
+
+  return escapeHtml(text).replace(
+    new RegExp(`(${pattern})`, "gi"),
+    '<mark class="rounded bg-yellow-200 px-0.5 text-yellow-950">$1</mark>'
+  );
 }
 
-// Genera HTML descargable con highlights
-function generateHighlightedHTML(filename: string, text: string, terms: string[]): string {
-  const highlighted = highlightText(text, terms);
+function buildPageHighlightedHtml(
+  page: DocumentPageContent,
+  matches: Array<DocumentMatch | (DocumentMatch & { page_number?: number })>
+) {
+  const pageMatches = matches.filter((match) => getMatchPage(match) === page.page);
+  const exactRanges = pageMatches
+    .filter((match) => typeof match.char_start === "number" && typeof match.char_end === "number")
+    .map((match) => ({
+      start: Math.max(0, match.char_start - page.char_start),
+      end: Math.min(page.text.length, match.char_end - page.char_start),
+      severity: match.severity,
+    }))
+    .filter((range) => range.start < range.end)
+    .sort((a, b) => a.start - b.start);
+
+  if (!exactRanges.length) {
+    const terms = [...new Set(pageMatches.map((match) => match.matched_term).filter(Boolean))];
+    return buildRegexHighlightedHtml(page.text, terms);
+  }
+
+  const merged: Array<{ start: number; end: number; severity: string }> = [];
+  for (const range of exactRanges) {
+    const last = merged[merged.length - 1];
+    if (last && range.start < last.end) {
+      last.end = Math.max(last.end, range.end);
+      continue;
+    }
+    merged.push({ ...range });
+  }
+
+  let result = "";
+  let cursor = 0;
+
+  for (const range of merged) {
+    const colorClass =
+      range.severity === "critica"
+        ? "rounded bg-red-200 px-0.5 text-red-950"
+        : range.severity === "alta"
+          ? "rounded bg-orange-200 px-0.5 text-orange-950"
+          : "rounded bg-yellow-200 px-0.5 text-yellow-950";
+
+    result += escapeHtml(page.text.slice(cursor, range.start));
+    result += `<mark class="${colorClass}">${escapeHtml(page.text.slice(range.start, range.end))}</mark>`;
+    cursor = range.end;
+  }
+
+  result += escapeHtml(page.text.slice(cursor));
+  return result;
+}
+
+function buildHighlightedDocumentHtml(
+  filename: string,
+  pages: DocumentPageContent[],
+  matches: Array<DocumentMatch | (DocumentMatch & { page_number?: number })>
+) {
+  const renderedPages = pages
+    .map((page) => {
+      const highlighted = buildPageHighlightedHtml(page, matches);
+      return `<section class="page">
+  <header class="page-header">Página ${page.page}</header>
+  <pre>${highlighted}</pre>
+</section>`;
+    })
+    .join("\n");
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8"/>
-<title>${filename} — In-Violenshe Lab</title>
-<style>
-  body { font-family: Georgia, serif; max-width: 800px; margin: 2rem auto; line-height: 1.7; color: #111; }
-  h1 { font-size: 1.1rem; color: #666; margin-bottom: 1.5rem; }
-  pre { white-space: pre-wrap; word-break: break-word; }
-  mark { background: #fef08a; padding: 0 2px; border-radius: 2px; }
-  @media print { body { margin: 1cm; } }
-</style>
+  <meta charset="UTF-8" />
+  <title>${escapeHtml(filename)} - Documento resaltado</title>
+  <style>
+    body { font-family: Georgia, serif; margin: 2rem auto; max-width: 960px; color: #111827; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    p { color: #6b7280; margin-bottom: 1.5rem; }
+    .page { border: 1px solid #e5e7eb; border-radius: 14px; padding: 1.25rem; margin-bottom: 1rem; background: #fff; }
+    .page-header { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; margin-bottom: 0.75rem; }
+    pre { white-space: pre-wrap; word-break: break-word; line-height: 1.7; margin: 0; }
+    mark { border-radius: 4px; padding: 0 2px; }
+    @media print { body { margin: 1cm; max-width: none; } }
+  </style>
 </head>
 <body>
-<h1>Análisis forense: ${filename}</h1>
-<pre>${highlighted}</pre>
+  <h1>${escapeHtml(filename)}</h1>
+  <p>Versión resaltada generada desde el texto extraído del documento.</p>
+  ${renderedPages}
 </body>
 </html>`;
 }
 
-function TextViewer({
-  file,
-  matches,
-}: {
-  file: File;
-  matches: Array<KeywordMatch & { page_number?: number }>;
-}) {
-  const [text, setText] = useState<string | null>(null);
+function downloadHighlightedDocument(
+  filename: string,
+  pages: DocumentPageContent[],
+  matches: Array<DocumentMatch | (DocumentMatch & { page_number?: number })>
+) {
+  const html = buildHighlightedDocumentHtml(filename, pages, matches);
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename.replace(/\.[^.]+$/, "") + "_resaltado.html";
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
-  useEffect(() => {
-    file.text().then(setText);
-  }, [file]);
+export function DocumentViewer({ filename, sourceType, transcript, matches }: DocumentViewerProps) {
+  const [selectedPage, setSelectedPage] = useState<number | null>(null);
 
-  const terms = [...new Set(matches.map((m) => m.matched_term).filter(Boolean))];
+  const pages = useMemo(() => {
+    if (transcript?.document_pages?.length) {
+      return transcript.document_pages;
+    }
 
-  const handleDownload = () => {
-    if (!text) return;
-    const html = generateHighlightedHTML(file.name, text, terms);
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = file.name.replace(/\.txt$/, "") + "_highlights.html";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    if (!transcript?.text) {
+      return [];
+    }
 
-  if (!text) {
+    return [
+      {
+        page: sourceType === "txt" ? 0 : 1,
+        char_start: 0,
+        char_end: transcript.text.length,
+        text: transcript.text,
+      },
+    ] satisfies DocumentPageContent[];
+  }, [sourceType, transcript]);
+
+  const visiblePages = selectedPage ? pages.filter((page) => page.page === selectedPage) : pages;
+
+  if (!transcript) {
     return (
-      <div className="flex items-center gap-2 text-gray-500 py-8">
-        <Loader2 className="h-4 w-4 animate-spin" /> Cargando texto...
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+        Estamos reconstruyendo el contenido del documento para mostrar el preview resaltado.
       </div>
     );
   }
 
-  const highlighted = highlightText(text, terms);
+  if (!pages.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+        No se pudo reconstruir la vista previa del documento para esta sesión.
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-500">{terms.length} términos resaltados</p>
-        <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1">
-          <Download className="h-3.5 w-3.5" /> Descargar con highlights
-        </Button>
-      </div>
-      <div
-        className="border rounded-lg p-4 bg-white dark:bg-gray-900 max-h-[500px] overflow-auto"
-      >
-        <pre
-          className="text-sm whitespace-pre-wrap break-words font-mono leading-relaxed dark:text-gray-200"
-          dangerouslySetInnerHTML={{ __html: highlighted }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function PDFViewer({
-  file,
-  matches,
-}: {
-  file: File;
-  matches: Array<KeywordMatch & { page_number?: number }>;
-}) {
-  const [selectedPage, setSelectedPage] = useState<number | null>(null);
-  const src = useMemo(() => URL.createObjectURL(file), [file]);
-
-  useEffect(() => {
-    return () => URL.revokeObjectURL(src);
-  }, [src]);
-
-  const terms = [...new Set(matches.map((m) => m.matched_term).filter(Boolean))];
-
-  const handleDownload = async () => {
-    // Genera un informe HTML con el contexto de cada detección
-    const rows = matches
-      .map((m) => {
-        const span = m.matched_span
-          ? m.matched_span.replace(
-              new RegExp(`(${escapeRegex(m.matched_term)})`, "gi"),
-              '<mark style="background:#fef08a;padding:0 2px;border-radius:2px;">$1</mark>'
-            )
-          : m.matched_term;
-        return `<tr>
-          <td style="padding:6px 10px;border-bottom:1px solid #eee;">${m.page_number ?? "—"}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #eee;font-family:monospace;">${m.matched_term}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #eee;">${m.label}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:0.85em;color:#555;">${span}</td>
-        </tr>`;
-      })
-      .join("");
-
-    const html = `<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8"/>
-<title>${file.name} — Informe forense</title>
-<style>body{font-family:sans-serif;max-width:900px;margin:2rem auto;color:#111}
-h1{font-size:1.1rem;color:#666}table{width:100%;border-collapse:collapse}
-th{background:#f1f5f9;text-align:left;padding:8px 10px;font-size:0.8rem;color:#555}
-@media print{body{margin:1cm}}</style>
-</head><body>
-<h1>Informe forense — ${file.name}</h1>
-<p style="color:#666;font-size:0.85rem">${matches.length} detecciones · Generado por In-Violenshe Lab</p>
-<table><thead><tr><th>Pág.</th><th>Término</th><th>Concepto</th><th>Contexto</th></tr></thead>
-<tbody>${rows}</tbody></table>
-</body></html>`;
-
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = file.name.replace(/\.pdf$/, "") + "_informe_forense.html";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const pageMatches = matches.filter((m) => !selectedPage || m.page_number === selectedPage);
-  const pages = [...new Set(matches.map((m) => m.page_number).filter(Boolean) as number[])].sort(
-    (a, b) => a - b
-  );
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {/* PDF embed */}
-      <div className="md:col-span-2 space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">{terms.length} términos detectados en {pages.length} páginas</p>
-          <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1">
-            <Download className="h-3.5 w-3.5" /> Informe con highlights
-          </Button>
-        </div>
-        {src ? (
-          <iframe
-            src={`${src}#page=${selectedPage ?? 1}`}
-            className="w-full rounded-lg border"
-            style={{ height: 500 }}
-            title="Vista previa PDF"
-          />
-        ) : (
-          <div className="flex items-center gap-2 text-gray-500 py-8">
-            <Loader2 className="h-4 w-4 animate-spin" /> Cargando PDF...
-          </div>
-        )}
-      </div>
-
-      {/* Panel lateral de detecciones */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Detecciones</p>
-          {selectedPage && (
-            <button
-              onClick={() => setSelectedPage(null)}
-              className="text-xs text-rose-600 underline"
-            >
-              ver todas
-            </button>
-          )}
-        </div>
-        <div className="space-y-1.5 max-h-[460px] overflow-y-auto">
-          {pageMatches.map((m, i) => (
-            <button
-              key={i}
-              onClick={() => {
-                if (m.page_number) setSelectedPage(m.page_number);
-              }}
-              className="w-full text-left rounded-lg border px-3 py-2 text-xs bg-white dark:bg-gray-900 hover:bg-yellow-50 dark:hover:bg-yellow-950 border-yellow-200 transition-colors"
-            >
-              {m.page_number && (
-                <span className="inline-block bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 text-xs mr-2">
-                  Pág. {m.page_number}
-                </span>
-              )}
-              <Badge className="text-xs px-1.5 py-0 mr-1">{m.label}</Badge>
-              <span className="font-medium">&ldquo;{m.matched_term}&rdquo;</span>
-              {m.matched_span && (
-                <p className="text-gray-500 mt-0.5 italic truncate">{m.matched_span}</p>
-              )}
-            </button>
-          ))}
-          {pageMatches.length === 0 && (
-            <p className="text-xs text-gray-400 py-4 text-center">Sin detecciones en esta página</p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DocxViewer({
-  matches,
-}: {
-  matches: Array<KeywordMatch & { page_number?: number }>;
-}) {
-  return (
-    <div className="space-y-3">
-      <div className="flex items-start gap-3 p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
-        <FileText className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
-        <p className="text-sm text-blue-800 dark:text-blue-200">
-          La vista previa inline de archivos DOCX no está disponible. Las detecciones y su contexto se muestran abajo.
-        </p>
-      </div>
-      <div className="space-y-2 max-h-96 overflow-y-auto">
-        {matches.map((m, i) => (
-          <div key={i} className="border rounded-lg p-3 bg-white dark:bg-gray-900 text-xs">
-            {m.page_number && (
-              <Badge variant="outline" className="mb-1 text-xs">Pág. {m.page_number}</Badge>
-            )}
-            <p className="font-medium mb-1">
-              <Badge className="mr-1 text-xs">{m.label}</Badge>
-              &ldquo;{m.matched_term}&rdquo;
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{sourceType.toUpperCase()}</Badge>
+              <Badge variant="outline">{matches.length} detecciones</Badge>
+              <Badge variant="outline">{pages.length} páginas con texto</Badge>
+            </div>
+            <p className="text-sm text-slate-600">
+              El preview usa el texto extraído y resalta las coincidencias dentro del propio documento.
             </p>
-            {m.matched_span && (
-              <p className="text-gray-500 italic">&ldquo;{m.matched_span}&rdquo;</p>
-            )}
           </div>
-        ))}
+          <div className="flex items-center gap-2">
+            {selectedPage != null && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedPage(null)}>
+                Ver todo
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              onClick={() => downloadHighlightedDocument(filename, pages, matches)}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Descargar resaltado
+            </Button>
+          </div>
+        </div>
       </div>
-    </div>
-  );
-}
 
-export function DocumentViewer({ file, matches }: DocumentViewerProps) {
-  const ext = file.name.split(".").pop()?.toLowerCase();
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_320px]">
+        <div className="space-y-4">
+          {visiblePages.map((page) => (
+            <section
+              key={page.page}
+              id={`document-page-${page.page}`}
+              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <FileSearch className="h-4 w-4 text-sky-600" />
+                  <p className="text-sm font-semibold text-slate-800">Página {page.page}</p>
+                </div>
+                <p className="text-xs text-slate-500">
+                  {(matches.filter((match) => getMatchPage(match) === page.page) || []).length} match(es)
+                </p>
+              </div>
+              <pre
+                className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-700"
+                dangerouslySetInnerHTML={{ __html: buildPageHighlightedHtml(page, matches) }}
+              />
+            </section>
+          ))}
+        </div>
 
-  return (
-    <div>
-      {ext === "txt" && <TextViewer file={file} matches={matches} />}
-      {ext === "pdf" && <PDFViewer file={file} matches={matches} />}
-      {ext === "docx" && <DocxViewer matches={matches} />}
+        <aside className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Detecciones</p>
+            <span className="text-xs text-slate-500">{matches.length}</span>
+          </div>
+
+          <div className="max-h-[640px] space-y-2 overflow-y-auto pr-1">
+            {matches.map((match, index) => {
+              const page = getMatchPage(match);
+              return (
+                <button
+                  key={`${match.matched_term}-${index}`}
+                  type="button"
+                  onClick={() => {
+                    if (page == null) return;
+                    setSelectedPage(page);
+                    requestAnimationFrame(() => {
+                      document.getElementById(`document-page-${page}`)?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      });
+                    });
+                  }}
+                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-left transition hover:bg-amber-50"
+                >
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    {page != null && (
+                      <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">
+                        Página {page}
+                      </Badge>
+                    )}
+                    <Badge>{match.label}</Badge>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-800">&ldquo;{match.matched_term}&rdquo;</p>
+                  {match.matched_span && <p className="mt-1 text-xs italic text-slate-500">{match.matched_span}</p>}
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }

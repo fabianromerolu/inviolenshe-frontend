@@ -5,68 +5,31 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { apiCreateManualDetection, type KeywordMatch, type ManualDetectionBody } from "@/lib/api";
+  apiCreateManualDetection,
+  type KeywordMatch,
+  type ManualDetectionBody,
+  type ReviewCandidate,
+} from "@/lib/api";
 
 interface TranscriptViewerProps {
   text: string;
   matches: KeywordMatch[];
+  reviewCandidates?: ReviewCandidate[];
   sessionId: string;
   language?: string;
   onManualDetectionCreated?: () => void;
 }
 
-function buildHighlightedHtml(text: string, matches: KeywordMatch[]): string {
-  if (!text) return "";
-
-  // Build a sorted list of (start, end, severity) ranges from matched_term occurrences
-  const ranges: Array<{ start: number; end: number; severity: string }> = [];
-
-  for (const match of matches) {
-    const term = match.matched_term;
-    if (!term) continue;
-    const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-    let m: RegExpExecArray | null;
-    while ((m = regex.exec(text)) !== null) {
-      ranges.push({ start: m.index, end: m.index + m[0].length, severity: match.severity });
-    }
-  }
-
-  if (ranges.length === 0) return escapeHtml(text);
-
-  // Sort by start, deduplicate overlapping
-  ranges.sort((a, b) => a.start - b.start);
-  const merged: typeof ranges = [];
-  for (const r of ranges) {
-    const last = merged[merged.length - 1];
-    if (last && r.start < last.end) {
-      if (r.end > last.end) last.end = r.end;
-    } else {
-      merged.push({ ...r });
-    }
-  }
-
-  let result = "";
-  let cursor = 0;
-  for (const { start, end, severity } of merged) {
-    result += escapeHtml(text.slice(cursor, start));
-    const colorClass =
-      severity === "critica"
-        ? "bg-red-200 text-red-900"
-        : severity === "alta"
-        ? "bg-orange-200 text-orange-900"
-        : "bg-yellow-200 text-yellow-900";
-    result += `<mark class="${colorClass} rounded px-0.5">${escapeHtml(text.slice(start, end))}</mark>`;
-    cursor = end;
-  }
-  result += escapeHtml(text.slice(cursor));
-  return result;
-}
+type HighlightRange = {
+  start: number;
+  end: number;
+  kind: "match" | "review";
+  severity?: string;
+  tooltip: string;
+  priority: number;
+};
 
 function escapeHtml(str: string): string {
   return str
@@ -76,50 +39,133 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function buildHighlightedHtml(
+  text: string,
+  matches: KeywordMatch[],
+  reviewCandidates: ReviewCandidate[] = []
+): string {
+  if (!text) return "";
+
+  const ranges: HighlightRange[] = [];
+
+  for (const match of matches) {
+    const term = match.matched_term;
+    if (!term) continue;
+    const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    let nextMatch: RegExpExecArray | null;
+
+    while ((nextMatch = regex.exec(text)) !== null) {
+      ranges.push({
+        start: nextMatch.index,
+        end: nextMatch.index + nextMatch[0].length,
+        kind: "match",
+        severity: match.severity,
+        tooltip: `${match.label}: ${match.matched_term}`,
+        priority: 2,
+      });
+    }
+  }
+
+  for (const candidate of reviewCandidates) {
+    const term = candidate.detected_word;
+    if (!term) continue;
+    const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    let nextMatch: RegExpExecArray | null;
+
+    while ((nextMatch = regex.exec(text)) !== null) {
+      ranges.push({
+        start: nextMatch.index,
+        end: nextMatch.index + nextMatch[0].length,
+        kind: "review",
+        tooltip: `${candidate.label}: ${candidate.detected_word} -> ${candidate.suggested_term} (${Math.round(candidate.similarity * 100)}%)`,
+        priority: 1,
+      });
+    }
+  }
+
+  if (ranges.length === 0) return escapeHtml(text);
+
+  ranges.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.priority !== b.priority) return b.priority - a.priority;
+    return b.end - b.start - (a.end - a.start);
+  });
+
+  const filtered: HighlightRange[] = [];
+  for (const range of ranges) {
+    const last = filtered[filtered.length - 1];
+    if (!last || range.start >= last.end) {
+      filtered.push({ ...range });
+    }
+  }
+
+  let result = "";
+  let cursor = 0;
+
+  for (const { start, end, severity, kind, tooltip } of filtered) {
+    result += escapeHtml(text.slice(cursor, start));
+    const colorClass =
+      kind === "review"
+        ? "rounded border border-sky-300 bg-sky-100 px-0.5 text-sky-900"
+        : severity === "critica"
+          ? "rounded bg-red-200 px-0.5 text-red-900"
+          : severity === "alta"
+            ? "rounded bg-orange-200 px-0.5 text-orange-900"
+            : "rounded bg-yellow-200 px-0.5 text-yellow-900";
+
+    result += `<mark class="${colorClass}" title="${escapeHtml(tooltip)}">${escapeHtml(text.slice(start, end))}</mark>`;
+    cursor = end;
+  }
+
+  result += escapeHtml(text.slice(cursor));
+  return result;
+}
+
 export function TranscriptViewer({
   text,
   matches,
+  reviewCandidates = [],
   sessionId,
   language = "es",
   onManualDetectionCreated,
 }: TranscriptViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-
   const [floatingPos, setFloatingPos] = useState<{ x: number; y: number } | null>(null);
   const [selectedText, setSelectedText] = useState("");
-
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState<{
-    label: string;
-    matched_term: string;
-    timestamp_start: string;
-    timestamp_end: string;
-    notes: string;
-  }>({ label: "", matched_term: "", timestamp_start: "00:00:00.000", timestamp_end: "00:00:00.000", notes: "" });
+  const [form, setForm] = useState({
+    label: "",
+    matched_term: "",
+    timestamp_start: "00:00:00.000",
+    timestamp_end: "00:00:00.000",
+    notes: "",
+  });
   const [submitting, setSubmitting] = useState(false);
 
   function handleMouseUp() {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.toString().trim().length < 2) {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.toString().trim().length < 2) {
       setFloatingPos(null);
       setSelectedText("");
       return;
     }
-    const range = sel.getRangeAt(0);
+
+    const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
-    setSelectedText(sel.toString().trim());
+    setSelectedText(selection.toString().trim());
     setFloatingPos({ x: rect.left + rect.width / 2, y: rect.top - 8 });
   }
 
   function openModal() {
-    setForm((f) => ({ ...f, label: "", matched_term: selectedText, notes: "" }));
+    setForm((current) => ({ ...current, label: "", matched_term: selectedText, notes: "" }));
     setFloatingPos(null);
     setShowModal(true);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
     if (!form.label || !form.matched_term) return;
+
     setSubmitting(true);
     try {
       const body: ManualDetectionBody = {
@@ -131,21 +177,21 @@ export function TranscriptViewer({
         source: "transcript",
         language,
       };
+
       await apiCreateManualDetection(sessionId, body);
       setShowModal(false);
       onManualDetectionCreated?.();
     } catch {
-      // noop — error is caught silently; user can retry
+      // noop
     } finally {
       setSubmitting(false);
     }
   }
 
-  const highlightedHtml = buildHighlightedHtml(text, matches);
+  const highlightedHtml = buildHighlightedHtml(text, matches, reviewCandidates);
 
   return (
     <div className="relative">
-      {/* Transcript text */}
       <div
         ref={containerRef}
         className="max-h-72 overflow-y-auto rounded border bg-muted/30 p-4 text-sm leading-relaxed whitespace-pre-wrap select-text"
@@ -153,39 +199,37 @@ export function TranscriptViewer({
         dangerouslySetInnerHTML={{ __html: highlightedHtml }}
       />
 
-      {/* Floating "Marcar manualmente" button near selection */}
       {floatingPos && (
         <div
           className="fixed z-50 -translate-x-1/2 -translate-y-full"
           style={{ left: floatingPos.x, top: floatingPos.y }}
         >
-          <Button size="sm" variant="outline" className="shadow-lg text-xs" onClick={openModal}>
-            ✏️ Marcar manualmente
+          <Button size="sm" variant="outline" className="text-xs shadow-lg" onClick={openModal}>
+            Marcar manualmente
           </Button>
         </div>
       )}
 
-      {/* Manual detection modal */}
       <Dialog open={showModal} onOpenChange={setShowModal}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Registrar detección manual</DialogTitle>
+            <DialogTitle>Registrar deteccion manual</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-3 text-sm">
             <div>
               <Label>Concepto / etiqueta *</Label>
               <Input
                 value={form.label}
-                onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
+                onChange={(event) => setForm((current) => ({ ...current, label: event.target.value }))}
                 placeholder="ej. violacion, acoso, grooming"
                 required
               />
             </div>
             <div>
-              <Label>Término detectado *</Label>
+              <Label>Termino detectado *</Label>
               <Input
                 value={form.matched_term}
-                onChange={(e) => setForm((f) => ({ ...f, matched_term: e.target.value }))}
+                onChange={(event) => setForm((current) => ({ ...current, matched_term: event.target.value }))}
                 required
               />
             </div>
@@ -194,7 +238,7 @@ export function TranscriptViewer({
                 <Label>Inicio (HH:MM:SS.mmm)</Label>
                 <Input
                   value={form.timestamp_start}
-                  onChange={(e) => setForm((f) => ({ ...f, timestamp_start: e.target.value }))}
+                  onChange={(event) => setForm((current) => ({ ...current, timestamp_start: event.target.value }))}
                   placeholder="00:00:00.000"
                 />
               </div>
@@ -202,7 +246,7 @@ export function TranscriptViewer({
                 <Label>Fin (HH:MM:SS.mmm)</Label>
                 <Input
                   value={form.timestamp_end}
-                  onChange={(e) => setForm((f) => ({ ...f, timestamp_end: e.target.value }))}
+                  onChange={(event) => setForm((current) => ({ ...current, timestamp_end: event.target.value }))}
                   placeholder="00:00:00.000"
                 />
               </div>
@@ -211,7 +255,7 @@ export function TranscriptViewer({
               <Label>Notas del investigador</Label>
               <Textarea
                 value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
                 rows={3}
                 maxLength={1000}
                 placeholder="Contexto adicional..."
@@ -222,7 +266,7 @@ export function TranscriptViewer({
                 Cancelar
               </Button>
               <Button type="submit" disabled={submitting}>
-                {submitting ? "Guardando..." : "Guardar detección"}
+                {submitting ? "Guardando..." : "Guardar deteccion"}
               </Button>
             </div>
           </form>

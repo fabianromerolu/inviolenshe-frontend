@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -153,11 +153,13 @@ function Banner({ state }: { state: BannerState }) {
 
   return (
     <div
-      className={`rounded-xl border px-4 py-3 text-sm ${
+      className={`fixed right-5 top-5 z-50 max-w-sm rounded-xl border px-4 py-3 text-sm shadow-lg backdrop-blur ${
         state.tone === "success"
-          ? "border-green-200 bg-green-50 text-green-700"
+          ? "border-green-200 bg-green-50/95 text-green-700"
           : "border-red-200 bg-red-50 text-red-700"
       }`}
+      role="status"
+      aria-live="polite"
     >
       {state.message}
     </div>
@@ -280,14 +282,14 @@ function RootDropZone({
 
 function FileCard({
   file,
-  onAnalyze,
+  onOpenAnalysis,
   onMove,
   onDelete,
   isMoving,
   isDeleting,
 }: {
   file: StoredFileRecord;
-  onAnalyze: (file: StoredFileRecord) => void;
+  onOpenAnalysis: (file: StoredFileRecord) => void;
   onMove: (file: StoredFileRecord) => void;
   onDelete: (fileId: string) => void;
   isMoving: boolean;
@@ -316,17 +318,23 @@ function FileCard({
         <div className="flex cursor-grab items-center self-stretch pr-1 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400">
           <GripVertical className="h-4 w-4" />
         </div>
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 ring-1 ring-black/[0.05] dark:bg-white/8 dark:text-slate-300 dark:ring-white/10">
-          <FileTypeIcon type={file.source_type} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-800 dark:text-white" title={file.original_filename}>
-            {file.original_filename}
-          </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {sourceTypeLabel(file.source_type)} - {formatBytes(file.size_bytes)} - {formatDate(file.created_at)}
-          </p>
-        </div>
+        <button
+          type="button"
+          onClick={() => onOpenAnalysis(file)}
+          className="flex min-w-0 flex-1 items-start gap-3 rounded-2xl p-1 text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/5"
+        >
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 ring-1 ring-black/[0.05] dark:bg-white/8 dark:text-slate-300 dark:ring-white/10">
+            <FileTypeIcon type={file.source_type} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-slate-800 dark:text-white" title={file.original_filename}>
+              {file.original_filename}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {sourceTypeLabel(file.source_type)} - {formatBytes(file.size_bytes)} - {formatDate(file.created_at)}
+            </p>
+          </div>
+        </button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -346,12 +354,10 @@ function FileCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-black/[0.05] pt-2 dark:border-white/5">
-        {!analyzed && (
-          <Button type="button" size="sm" className="min-w-[8.25rem] flex-1" onClick={() => onAnalyze(file)}>
-            <PlayCircle className="mr-1 h-3.5 w-3.5" />
-            Analizar
-          </Button>
-        )}
+        <Button type="button" size="sm" className="min-w-[8.25rem] flex-1" onClick={() => onOpenAnalysis(file)}>
+          <PlayCircle className="mr-1 h-3.5 w-3.5" />
+          {analyzed ? "Ver analisis" : "Analizar"}
+        </Button>
         <Button type="button" size="sm" variant="outline" className="min-w-[7.5rem] flex-1" onClick={() => onMove(file)} disabled={isMoving}>
           {isMoving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <MoveRight className="mr-1 h-3.5 w-3.5" />}
           Mover a
@@ -389,6 +395,18 @@ export default function FilesPage() {
   const [moveFileOpen, setMoveFileOpen] = useState(false);
   const [moveFileDestination, setMoveFileDestination] = useState<string | null>(null);
   const [uploadTargetFolderId, setUploadTargetFolderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!banner) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      setBanner(null);
+    }, 3200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [banner]);
 
   const { data: folders = [] } = useQuery({
     queryKey: ["folders"],
@@ -524,8 +542,10 @@ export default function FilesPage() {
     moveFileMutation.mutate({ fileId, folderId });
   }
 
-  function handleAnalyze(file: StoredFileRecord) {
-    router.push(`${analyzeRoute(file.source_type)}?file_id=${file.id}`);
+  function handleOpenAnalysis(file: StoredFileRecord) {
+    const targetRoute = analyzeRoute(file.source_type);
+    const query = file.session_id ? `session_id=${file.session_id}` : `file_id=${file.id}`;
+    router.push(`${targetRoute}?${query}`);
   }
 
   function handleUploadTrigger(folderId: string | null) {
@@ -844,7 +864,7 @@ export default function FilesPage() {
                 <FileCard
                   key={file.id}
                   file={file}
-                  onAnalyze={handleAnalyze}
+                  onOpenAnalysis={handleOpenAnalysis}
                   onMove={openMoveFile}
                   onDelete={(fileId) => deleteFileMutation.mutate(fileId)}
                   isMoving={movingFileId === file.id}

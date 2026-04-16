@@ -9,6 +9,7 @@ import {
   apiFeedback,
   apiGetFile,
   apiGetSession,
+  apiGetSessionTranscript,
   apiListFiles,
   apiListSessions,
   apiUpload,
@@ -17,6 +18,7 @@ import {
   type SessionDetail,
   type SessionSummary,
   type StoredFileRecord,
+  type TranscriptResponse,
   type UploadResponse,
 } from "@/lib/api";
 import { useUploadStore } from "@/lib/upload-store";
@@ -71,6 +73,43 @@ function toUploadInfo(file: StoredFileRecord): UploadResponse {
     filename: file.original_filename,
     source_type: file.source_type,
     size_bytes: file.size_bytes,
+  };
+}
+
+function buildSessionDocumentResult(detail: SessionDetail, transcript: TranscriptResponse | null): DocumentProcessResponse {
+  const confirmedDetections = detail.detections.filter((detection) => {
+    if (!transcript?.review_candidates?.length) return true;
+
+    return !transcript.review_candidates.some(
+      (candidate) =>
+        candidate.timestamp_start === detection.timestamp_start &&
+        candidate.timestamp_end === detection.timestamp_end &&
+        candidate.suggested_term === detection.matched_term &&
+        !detection.matched_span
+    );
+  });
+
+  const normalizedMatches = confirmedDetections.map((detection) => ({
+    ...(detection as unknown as DocumentProcessResponse["matches"][number]),
+    page: detection.page_number ?? (detail.source_type === "txt" ? 0 : 1),
+    char_start: 0,
+    char_end: 0,
+  }));
+  const inferredPages = [...new Set(normalizedMatches.map((match) => match.page).filter((page) => typeof page === "number"))]
+    .length;
+
+  return {
+    session_id: detail.id,
+    filename: detail.filename,
+    source_type: detail.source_type,
+    language: detail.language,
+    total_pages: transcript?.total_pages ?? (inferredPages || 1),
+    processing_time_seconds: detail.duration_seconds,
+    total_matches: detail.total_matches,
+    total_review_candidates: transcript?.review_candidates?.length ?? detail.total_review_candidates,
+    matches: normalizedMatches,
+    review_candidates: transcript?.review_candidates ?? [],
+    export_hint: "",
   };
 }
 
@@ -155,11 +194,11 @@ function DocMatchCard({ match, onFeedback }: { match: DocMatch; onFeedback: (id:
 
 function ResultPanel({
   result,
-  file,
+  transcript,
   onFeedback,
 }: {
   result: DocumentProcessResponse;
-  file: File | null;
+  transcript: TranscriptResponse | null;
   onFeedback: (id: string, action: string) => void;
 }) {
   const [isExporting, setIsExporting] = useState(false);
@@ -194,13 +233,18 @@ function ResultPanel({
         )}
       </div>
 
-      {file && result.matches.length > 0 && (
+      {(result.session_id || transcript) && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">Visor de documento con detecciones</CardTitle>
+            <CardTitle className="text-sm">Visor de documento resaltado</CardTitle>
           </CardHeader>
           <CardContent>
-            <DocumentViewer file={file} matches={result.matches} />
+            <DocumentViewer
+              filename={result.filename}
+              sourceType={result.source_type}
+              transcript={transcript}
+              matches={result.matches}
+            />
           </CardContent>
         </Card>
       )}
@@ -254,11 +298,17 @@ function HistoryTab() {
   });
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptResponse | null>(null);
+  const feedbackMutation = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: string }) => apiFeedback(id, action),
+  });
 
   const loadSession = async (id: string) => {
     setLoadingId(id);
     try {
-      setDetail(await apiGetSession(id));
+      const session = await apiGetSession(id);
+      setDetail(session);
+      setTranscript(await apiGetSessionTranscript(id).catch(() => null));
     } finally {
       setLoadingId(null);
     }
@@ -283,26 +333,24 @@ function HistoryTab() {
   }
 
   if (detail) {
-    const fakeResult: DocumentProcessResponse = {
-      session_id: detail.id,
-      filename: detail.filename,
-      source_type: detail.source_type,
-      language: detail.language,
-      total_pages: 1,
-      processing_time_seconds: detail.duration_seconds,
-      total_matches: detail.total_matches,
-      total_review_candidates: detail.total_review_candidates,
-      matches: detail.detections as unknown as DocumentProcessResponse["matches"],
-      review_candidates: [],
-      export_hint: "",
-    };
+    const fakeResult = buildSessionDocumentResult(detail, transcript);
 
     return (
       <div className="space-y-4">
-        <button onClick={() => setDetail(null)} className="text-xs text-rose-600 underline">
+        <button
+          onClick={() => {
+            setDetail(null);
+            setTranscript(null);
+          }}
+          className="text-xs text-rose-600 underline"
+        >
           Volver al historial
         </button>
-        <ResultPanel result={fakeResult} file={null} onFeedback={() => undefined} />
+        <ResultPanel
+          result={fakeResult}
+          transcript={transcript}
+          onFeedback={(id, action) => feedbackMutation.mutate({ id, action })}
+        />
       </div>
     );
   }
@@ -343,11 +391,17 @@ function MyFilesTab({ onAnalyzeFromFile }: { onAnalyzeFromFile: (stored: StoredF
   });
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptResponse | null>(null);
+  const feedbackMutation = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: string }) => apiFeedback(id, action),
+  });
 
   const loadAnalyzed = async (sessionId: string, fileId: string) => {
     setLoadingId(fileId);
     try {
-      setDetail(await apiGetSession(sessionId));
+      const session = await apiGetSession(sessionId);
+      setDetail(session);
+      setTranscript(await apiGetSessionTranscript(sessionId).catch(() => null));
     } finally {
       setLoadingId(null);
     }
@@ -373,26 +427,24 @@ function MyFilesTab({ onAnalyzeFromFile }: { onAnalyzeFromFile: (stored: StoredF
   }
 
   if (detail) {
-    const fakeResult: DocumentProcessResponse = {
-      session_id: detail.id,
-      filename: detail.filename,
-      source_type: detail.source_type,
-      language: detail.language,
-      total_pages: 1,
-      processing_time_seconds: detail.duration_seconds,
-      total_matches: detail.total_matches,
-      total_review_candidates: detail.total_review_candidates,
-      matches: detail.detections as unknown as DocumentProcessResponse["matches"],
-      review_candidates: [],
-      export_hint: "",
-    };
+    const fakeResult = buildSessionDocumentResult(detail, transcript);
 
     return (
       <div className="space-y-4">
-        <button onClick={() => setDetail(null)} className="text-xs text-rose-600 underline">
+        <button
+          onClick={() => {
+            setDetail(null);
+            setTranscript(null);
+          }}
+          className="text-xs text-rose-600 underline"
+        >
           Volver a mis archivos
         </button>
-        <ResultPanel result={fakeResult} file={null} onFeedback={() => undefined} />
+        <ResultPanel
+          result={fakeResult}
+          transcript={transcript}
+          onFeedback={(id, action) => feedbackMutation.mutate({ id, action })}
+        />
       </div>
     );
   }
@@ -456,10 +508,12 @@ function DocumentsPageInner() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const routeFileId = searchParams?.get("file_id");
+  const routeSessionId = searchParams?.get("session_id");
 
   const [activeTab, setActiveTab] = useState<DocumentsTab>("process");
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<DocumentProcessResponse | null>(null);
+  const [documentTranscript, setDocumentTranscript] = useState<TranscriptResponse | null>(null);
   const [language, setLanguage] = useState("es");
   const [profile, setProfile] = useState("balanced_review");
   const [uploadedInfo, setUploadedInfo] = useState<UploadResponse | null>(null);
@@ -469,7 +523,7 @@ function DocumentsPageInner() {
 
   const routeStoredFileQuery = useQuery({
     queryKey: ["stored-file", routeFileId],
-    enabled: !!routeFileId,
+    enabled: !!routeFileId && !routeSessionId,
     queryFn: () => apiGetFile(routeFileId!),
     retry: false,
   });
@@ -478,19 +532,45 @@ function DocumentsPageInner() {
     routeStoredFileQuery.data && ["pdf", "txt", "docx"].includes(routeStoredFileQuery.data.source_type)
       ? routeStoredFileQuery.data
       : null;
-  const preparedStoredFile = selectedStoredFile ?? routeStoredFile;
+  const resolvedRouteSessionId = routeSessionId ?? routeStoredFile?.session_id ?? null;
+  const routeStoredFileForAnalyze = routeStoredFile && !routeStoredFile.session_id ? routeStoredFile : null;
+  const routeSessionQuery = useQuery({
+    queryKey: ["session-view-doc", resolvedRouteSessionId],
+    enabled: !!resolvedRouteSessionId,
+    queryFn: async () => {
+      const session = await apiGetSession(resolvedRouteSessionId!);
+      const transcript = await apiGetSessionTranscript(resolvedRouteSessionId!).catch(() => null);
+      return { session, transcript };
+    },
+    retry: false,
+  });
+
+  const routeSessionView =
+    routeSessionQuery.data && ["pdf", "txt", "docx"].includes(routeSessionQuery.data.session.source_type)
+      ? routeSessionQuery.data
+      : null;
+  const routeSessionResult = routeSessionView
+    ? buildSessionDocumentResult(routeSessionView.session, routeSessionView.transcript)
+    : null;
+  const displayedResult = result ?? routeSessionResult;
+  const displayedTranscript = documentTranscript ?? routeSessionView?.transcript ?? null;
+  const preparedStoredFile = selectedStoredFile ?? routeStoredFileForAnalyze;
   const preparedUpload = uploadedInfo ?? (preparedStoredFile ? toUploadInfo(preparedStoredFile) : null);
-  const isResolvingStoredFile = !selectedStoredFile && !uploadedInfo && !!routeFileId && routeStoredFileQuery.isLoading;
+  const isResolvingStoredFile =
+    !selectedStoredFile && !uploadedInfo && !!routeFileId && !resolvedRouteSessionId && routeStoredFileQuery.isLoading;
+  const isResolvingSession = !!resolvedRouteSessionId && routeSessionQuery.isLoading;
   const hasInvalidRouteFile = !!routeFileId && routeStoredFileQuery.isSuccess && !routeStoredFile;
+  const hasInvalidRouteSession = !!resolvedRouteSessionId && routeSessionQuery.isSuccess && !routeSessionView;
 
   const uploadMutation = useMutation({
     mutationFn: (selectedFile: File) => apiUpload(selectedFile),
     onMutate: (selectedFile) => {
       const id = uuidv4();
-      if (routeFileId) {
+      if (routeFileId || routeSessionId) {
         router.replace("/documents", { scroll: false });
       }
       setResult(null);
+      setDocumentTranscript(null);
       setUploadedInfo(null);
       setSelectedStoredFile(null);
       addUpload({
@@ -517,8 +597,13 @@ function DocumentsPageInner() {
   const analyzeMutation = useMutation({
     mutationFn: ({ fileId, lang, prof }: { fileId: string; lang: string; prof: string }) =>
       apiAnalyzeDocument(fileId, lang, prof),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setResult(data);
+      if (data.session_id) {
+        setDocumentTranscript(await apiGetSessionTranscript(data.session_id).catch(() => null));
+      } else {
+        setDocumentTranscript(null);
+      }
       if (currentUploadId) {
         updateUpload(currentUploadId, { status: "done", result: data, finishedAt: new Date() });
       }
@@ -537,11 +622,11 @@ function DocumentsPageInner() {
     mutationFn: ({ id, action }: { id: string; action: string }) => apiFeedback(id, action),
   });
 
-  const currentStep = isResolvingStoredFile
+  const currentStep = isResolvingStoredFile || isResolvingSession
     ? "resolving"
     : analyzeMutation.isPending
       ? "analyzing"
-      : result
+      : displayedResult
         ? "done"
         : preparedUpload
           ? "uploaded"
@@ -550,12 +635,13 @@ function DocumentsPageInner() {
   function resetFlow() {
     setFile(null);
     setResult(null);
+    setDocumentTranscript(null);
     setUploadedInfo(null);
     setSelectedStoredFile(null);
     setCurrentUploadId(null);
     uploadMutation.reset();
     analyzeMutation.reset();
-    if (routeFileId) {
+    if (routeFileId || routeSessionId) {
       router.replace("/documents", { scroll: false });
     }
   }
@@ -563,12 +649,13 @@ function DocumentsPageInner() {
   function handleAnalyzeFromFile(storedFile: StoredFileRecord) {
     setFile(null);
     setResult(null);
+    setDocumentTranscript(null);
     setUploadedInfo(null);
     setSelectedStoredFile(storedFile);
     setActiveTab("process");
     uploadMutation.reset();
     analyzeMutation.reset();
-    if (routeFileId) {
+    if (routeFileId || routeSessionId) {
       router.replace("/documents", { scroll: false });
     }
   }
@@ -619,7 +706,9 @@ function DocumentsPageInner() {
                   {currentStep === "idle"
                     ? "Paso 1 - Subir documento"
                     : currentStep === "resolving"
-                      ? "Preparando documento"
+                      ? resolvedRouteSessionId
+                        ? "Cargando analisis"
+                        : "Preparando documento"
                       : currentStep === "uploaded"
                         ? "Paso 2 - Configurar y analizar"
                         : currentStep === "analyzing"
@@ -628,10 +717,10 @@ function DocumentsPageInner() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-5 pt-5">
-                {(routeStoredFileQuery.isError || hasInvalidRouteFile) && (
+                {(routeStoredFileQuery.isError || routeSessionQuery.isError || hasInvalidRouteFile || hasInvalidRouteSession) && (
                   <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    No se pudo preparar el archivo solicitado para este modulo. Verifica el enlace o vuelve a seleccionarlo
-                    desde Archivos.
+                    No se pudo abrir el archivo o el analisis solicitado para este modulo. Verifica el enlace o vuelve a
+                    seleccionarlo desde Archivos.
                   </div>
                 )}
 
@@ -683,8 +772,14 @@ function DocumentsPageInner() {
                 {currentStep === "resolving" && (
                   <div className="flex flex-col items-center gap-3 py-10 text-gray-500">
                     <Loader2 className="h-8 w-8 animate-spin text-sky-500" />
-                    <p className="text-sm font-medium">Buscando documento seleccionado...</p>
-                    <p className="text-xs text-gray-400">Estamos preparando el Paso 2 para que lo analices sin volver a cargarlo.</p>
+                    <p className="text-sm font-medium">
+                      {resolvedRouteSessionId ? "Cargando analisis guardado..." : "Buscando documento seleccionado..."}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {resolvedRouteSessionId
+                        ? "Estamos recuperando el resultado persistido y la transcripcion completa de esta sesion."
+                        : "Estamos preparando el Paso 2 para que lo analices sin volver a cargarlo."}
+                    </p>
                   </div>
                 )}
 
@@ -787,8 +882,12 @@ function DocumentsPageInner() {
               </CardContent>
             </Card>
 
-            {result && (
-              <ResultPanel result={result} file={file} onFeedback={(id, action) => feedbackMutation.mutate({ id, action })} />
+            {displayedResult && (
+              <ResultPanel
+                result={displayedResult}
+                transcript={displayedTranscript}
+                onFeedback={(id, action) => feedbackMutation.mutate({ id, action })}
+              />
             )}
           </TabsContent>
 
